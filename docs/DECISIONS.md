@@ -20,6 +20,20 @@
 | D14 | 通知 | 暫不做即時通知；以定期檢閱／主動邀請 Keeper 為主 | 視日後狀況再選管道 |
 | D15 | 冷啟動 | 訪談 → 匯入各 agent 記憶 → 匯入對話歷史 → 對帳 | 依來源信任度由高到低 |
 | D16 | 部署 | 使用者 7x24 的 Mac；遠端經 Tailscale | |
+| D17 | `get_context` | 只給索引與摘要，細節由 agent 以 `recall` 自行調閱 | 保持簡單 |
+| D18 | 衝突判定 | 個案直接與使用者討論；Keeper 先給情境判斷 | |
+| D19 | 基準測試 | 不定期的輕量使用者記憶基準測試，採反巴納姆原則 | 衡量「AI 更懂我」 |
+| D20 | 口吻 | 知識區分 stated／observed／inferred；推測不得進憲法層 | 懂但不自以為懂 |
+| D21 | 默契 | 新增 `calibration` 類型：紅線以外的授權隨證據成長 | 默契是長出來的 |
+| D22 | 揭露分級 | card／profile／private；名片 → 數位自傳 | 同一份 vault 依對象投影 |
+| D23 | Agent 觀點 | 寫在提案的 `rationale`；以 `scope.agents` 容納「差別待遇」 | 不強求單一真相、不同質化各 agent |
+| D24 | 問卷收集 | 盲測問卷交給各 AI；回覆經 `substrate import` 轉為提案，原文存於 raw/imports | 第三方轉述不建議入憲法層、推測信心度上限 0.6 |
+
+## 實作狀態
+
+- **v0.1**（2026-09-24）：vault 讀寫與 git 自動提交、記憶 PR 全流程與硬性不變式、
+  MCP server（stdio／HTTP + bearer token）、動態 instructions、CLI 審查、主題視圖、Keeper 規格範本。
+  尚未實作：SQLite 索引（目前逐檔掃描，個人規模足夠）、web 審查 UI、敘事視圖、基準測試、對話歷史匯入。問卷回覆匯入已於 D24 加入。
 
 ## 待討論
 
@@ -30,4 +44,6 @@
 - [ ] 多 agent 同時寫入 proposals 時的 git 提交策略（daemon 批次 commit）
 - [ ] 敏感資訊的 scope／權限模型（哪些 agent 能讀哪些層、哪些領域）
 - [ ] 如何衡量「AI 更懂我」：例如每個 session 的糾正次數趨勢
-- [ ] vault repo 命名
+- [x] vault repo 命名：SubstrateMesh_mine（私有）
+- [ ] 威脅模型：vault 含個資，需以資安標準設計（加密、存取控制、MCP 認證、稽核）
+- [ ] 敘事視圖（數位自傳）的生成方式與頻率

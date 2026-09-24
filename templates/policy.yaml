@@ -1,0 +1,26 @@
+# Keeper 審查政策。這裡是 Keeper 的判斷準則；
+# 程式另外強制執行一組不可關閉的硬性不變式（見 KEEPER.md）。
+
+auto_merge:
+  experience:
+    # 格式合法且附原話即可合併
+    require_quote: true
+  preference:
+    # 需要多少個「獨立 session」的證據才自動合併
+    min_independent_sessions: 2
+    # 與現有知識衝突時一律上呈
+    on_conflict: escalate
+  constitution:
+    # 永遠上呈使用者
+    on_any: escalate
+
+voice:
+  # 推測類知識的信心度上限
+  inferred_max_confidence: 0.6
+
+ttl_defaults:
+  focus: 30d
+
+review:
+  # 每次檢閱給使用者看的事項上限：只挑真正需要判斷的
+  max_items_for_user: 5

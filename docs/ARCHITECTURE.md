@@ -61,11 +61,14 @@ vault/
 ---
 id: mem_01J8...
 layer: preference            # constitution | preference | experience
-kind: preference             # preference | fact | principle | lesson | example | focus
+kind: preference             # preference | fact | principle | lesson | example | focus | calibration
+voice: stated                # stated（使用者說的）| observed（觀察到的）| inferred（推測的）
 claim: "回覆程式問題時，先給結論再展開細節"
 scope:
   domain: coding
   contexts: [code-review]
+  agents: ["*"]              # 適用哪些 agent；同一偏好可只對特定 agent 成立
+disclosure: card             # card（名片）| profile（畫像）| private（自傳/私密）
 confidence: 0.8
 status: active               # active | superseded | archived
 valid_from: 2026-09-24
@@ -94,8 +97,10 @@ target: null                 # update/supersede 時指向 mem_...
 claim: "..."
 kind: preference
 suggested_layer: preference
-scope: { domain: coding, contexts: [code-review] }
+voice: observed
+scope: { domain: coding, contexts: [code-review], agents: ["*"] }
 confidence: 0.7
+rationale: "提交者的觀點與推論理由（agent 的聲音記錄於此）"
 evidence:
   - source: claude-code/session_xxx
     quote: "..."
@@ -109,6 +114,40 @@ resolution: null             # 合併後指向 mem_...；拒絕時寫理由
 
 - **被拒絕的提案保留**，避免同樣的錯誤推論被不同 agent 反覆提交。
 - **沒有原話證據的提案**，Keeper 應降低權重。
+- **`rationale` 是 agent 的觀點**。不同 agent 對使用者的觀察不一致，未必是錯誤——
+  可能是使用者對不同 agent 本來就有不同期待（以 `scope.agents` 表達），不強求單一真相。
+
+### 三種口吻（voice）
+
+| voice | 意義 | 限制 |
+|---|---|---|
+| `stated` | 使用者親口說的 | 信任度最高 |
+| `observed` | 由行為觀察到的 | 需多次獨立證據才能進偏好層 |
+| `inferred` | Agent 的推測 | **永遠不能進入憲法層**；對外提供時必須標示為推測 |
+
+### 默契校準（calibration）
+
+紅線（永遠要問的事）屬於憲法層；紅線以外「哪些是瑣事可自行判斷」則是**會成長的記憶**。
+`calibration` 條目依領域記錄「agent 自行判斷後的結果」，證據累積越多，該領域的授權範圍越大——
+默契是**證據驅動的授權擴張**，而非一次定死的規則。
+
+### 揭露分級（disclosure）
+
+同一份 vault 依對象投影出不同深度：
+
+- `card`（名片）：初次接觸的 agent 即可取得的基本認識。
+- `profile`（畫像）：長期合作的 agent。
+- `private`（自傳／私密）：僅限使用者明確授權的 agent 與 Keeper。
+
+## 4.1 畫像使用守則（隨 MCP instructions 提供給所有 agent）
+
+目標是「懂使用者，但不自以為懂」：
+
+1. 畫像是**先驗**，不是**判決**；傾向不等於規則。
+2. 風險高或不確定時，仍然要問。
+3. **用畫像去做，不要拿畫像來說。** 不要以「我知道你喜歡…」來證明自己懂。
+4. 推測（`inferred`）不得當成事實陳述。
+5. 記錄張力與例外；不要把矛盾抹平成單一標籤。
 
 ## 5. 記憶 PR 生命週期
 
@@ -138,6 +177,8 @@ resolution: null             # 合併後指向 mem_...；拒絕時寫理由
 | `recall(query)` | 查詢特定主題，附出處與信心度 |
 | `propose_memory(...)` | 提交記憶 PR |
 | `record_example(...)` | 記錄一份使用者接受的優秀產出 |
+
+`get_context` 只回傳**索引與摘要**；細節由 agent 自行以 `recall` 調閱，保持簡單。
 
 **讀取路徑 = 純 MCP 拉取。** daemon 在連線時透過 MCP `instructions` 欄位動態提供一份**精簡核心摘要**
 （語言、自主邊界、反模式、如何與何時提交記憶），支援的 client（如 Claude Code）會自動注入系統提示；
@@ -194,3 +235,14 @@ resolution: null             # 合併後指向 mem_...；拒絕時寫理由
    ▲ 本機：Claude Code / opencode / loom / hermes
    ▲ 遠端：經 Tailscale 連入
 ```
+
+## 10. 使用者記憶基準測試（Memory Bench）
+
+不定期出考卷，直接考各 agent 對使用者的理解，也反過來檢驗記憶本身的品質。
+
+- **反巴納姆原則**：答案必須具體、可證偽、能區分「這個使用者」與「一般人」。
+  放諸四海皆準的回答（「你重視深度思考」）一律零分。
+- **好題目必須能被答錯**：以情境判斷題為主，而非形容詞題。
+- 若某題各 agent 普遍答錯，優先懷疑**記憶寫得不好**，而非 agent 沒讀。
+- 題庫本身也存於 vault，隨畫像演化。
+
