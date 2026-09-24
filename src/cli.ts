@@ -2,7 +2,9 @@
 import os from "node:os";
 import path from "node:path";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import { readFile } from "node:fs/promises";
 import { startHttp } from "./http.js";
+import { importQuestionnaire } from "./importer.js";
 import {
   PolicyError,
   commentProposal,
@@ -31,6 +33,7 @@ const HELP = `substrate ${VERSION} — 個人上下文基質
   substrate proposals merge <id> [--note ..] [--layer ..]
   substrate proposals reject|defer <id> --note <理由>
   substrate proposals comment <id> --note <內容>
+  substrate import <回覆檔> --source <AI 名稱>     匯入問卷回覆，轉為記憶 PR
   substrate expire                               封存到期知識
   substrate views                                重建 views/ 主題視圖
 
@@ -193,6 +196,15 @@ async function main() {
         default:
           throw new Error(`未知的 proposals 子命令：${sub}`);
       }
+    }
+    case "import": {
+      const source = str(a.flags.source);
+      if (!sub || !source) throw new Error("用法：substrate import <回覆檔> --source <AI 名稱>");
+      const vault = await Vault.open(vaultPath(a));
+      const r = await importQuestionnaire(vault, source, await readFile(sub, "utf8"));
+      console.log(`原始回覆：${r.raw}\n已建立 ${r.proposals.length} 筆提案。`);
+      for (const s of r.skipped) console.log(`略過第 ${s.index + 1} 項：${s.reason}`);
+      return;
     }
     case "expire": {
       const ids = await expireMemories(await Vault.open(vaultPath(a)), USER);

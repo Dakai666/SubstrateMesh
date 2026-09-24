@@ -16,6 +16,7 @@ SubstrateMesh 是一個**個人上下文基質（Personal Context Substrate）**
 - [願景](docs/VISION.md) — 為什麼要做、核心信念、刻意不做的事
 - [架構](docs/ARCHITECTURE.md) — 分層、資料模型、記憶 PR、MCP 介面、Keeper、部署
 - [決策紀錄](docs/DECISIONS.md) — 已拍板的決策與仍待討論的問題
+- [畫像收集問卷](docs/questionnaire.md) — 交給不同 AI 回答，匯入後對帳、擴充與糾錯
 
 ## 快速開始
 
@@ -62,6 +63,14 @@ substrate proposals show <id>
 substrate proposals merge <id> --note "理由" [--layer constitution]
 substrate proposals reject <id> --note "理由"
 substrate views                            # 重建 views/ 下給人閱讀的主題視圖
+```
+
+### 從其他 AI 收集畫像
+
+把 [問卷](docs/questionnaire.md) 交給各個 AI，回覆存檔後匯入：
+
+```bash
+substrate import replies/chatgpt.md --source chatgpt
 ```
 
 ### Keeper（排程的 headless Claude Code）

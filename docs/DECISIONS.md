@@ -27,6 +27,7 @@
 | D21 | 默契 | 新增 `calibration` 類型：紅線以外的授權隨證據成長 | 默契是長出來的 |
 | D22 | 揭露分級 | card／profile／private；名片 → 數位自傳 | 同一份 vault 依對象投影 |
 | D23 | Agent 觀點 | 寫在提案的 `rationale`；以 `scope.agents` 容納「差別待遇」 | 不強求單一真相、不同質化各 agent |
+| D24 | 問卷收集 | 盲測問卷交給各 AI；回覆經 `substrate import` 轉為提案，原文存於 raw/imports | 第三方轉述不建議入憲法層、推測信心度上限 0.6 |
 
 ## 實作狀態
 
