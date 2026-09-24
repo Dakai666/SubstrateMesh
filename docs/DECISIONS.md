@@ -28,6 +28,12 @@
 | D22 | 揭露分級 | card／profile／private；名片 → 數位自傳 | 同一份 vault 依對象投影 |
 | D23 | Agent 觀點 | 寫在提案的 `rationale`；以 `scope.agents` 容納「差別待遇」 | 不強求單一真相、不同質化各 agent |
 
+## 實作狀態
+
+- **v0.1**（2026-09-24）：vault 讀寫與 git 自動提交、記憶 PR 全流程與硬性不變式、
+  MCP server（stdio／HTTP + bearer token）、動態 instructions、CLI 審查、主題視圖、Keeper 規格範本。
+  尚未實作：SQLite 索引（目前逐檔掃描，個人規模足夠）、web 審查 UI、敘事視圖、基準測試、匯入工具。
+
 ## 待討論
 
 - [ ] `get_context` 的組裝策略：如何在 token 預算下挑選最相關的知識（純規則、關鍵字、或加入向量索引）
