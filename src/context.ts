@@ -54,10 +54,11 @@ function relevance(query: Set<string>, text: string): number {
   return hit / query.size;
 }
 
-const VOICE_LABEL = { stated: "你說的", observed: "觀察", inferred: "推測" } as const;
+// 給 agent 讀的標籤：以第三人稱指稱使用者，避免 agent 把「你」讀成自己
+const VOICE_LABEL = { stated: "使用者親述", observed: "觀察", inferred: "推測" } as const;
 
 export function formatLine(m: MemoryMeta): string {
-  const tags = [m.layer, m.kind, m.scope.domain, VOICE_LABEL[m.voice], m.confidence.toFixed(1)]
+  const tags = [m.layer, m.kind, m.scope.domain, VOICE_LABEL[m.voice], String(m.confidence)]
     .filter(Boolean)
     .join("·");
   const ctx = m.scope.contexts.length ? ` [情境：${m.scope.contexts.join("、")}]` : "";
