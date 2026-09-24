@@ -33,7 +33,7 @@
 
 - **v0.1**（2026-09-24）：vault 讀寫與 git 自動提交、記憶 PR 全流程與硬性不變式、
   MCP server（stdio／HTTP + bearer token）、動態 instructions、CLI 審查、主題視圖、Keeper 規格範本。
-  尚未實作：SQLite 索引（目前逐檔掃描，個人規模足夠）、web 審查 UI、敘事視圖、基準測試、匯入工具。
+  尚未實作：SQLite 索引（目前逐檔掃描，個人規模足夠）、web 審查 UI、敘事視圖、基準測試、對話歷史匯入。問卷回覆匯入已於 D24 加入。
 
 ## 待討論
 
@@ -44,6 +44,6 @@
 - [ ] 多 agent 同時寫入 proposals 時的 git 提交策略（daemon 批次 commit）
 - [ ] 敏感資訊的 scope／權限模型（哪些 agent 能讀哪些層、哪些領域）
 - [ ] 如何衡量「AI 更懂我」：例如每個 session 的糾正次數趨勢
-- [ ] vault repo 命名
+- [x] vault repo 命名：SubstrateMesh_mine（私有）
 - [ ] 威脅模型：vault 含個資，需以資安標準設計（加密、存取控制、MCP 認證、稽核）
 - [ ] 敘事視圖（數位自傳）的生成方式與頻率
