@@ -180,6 +180,13 @@ resolution: null             # 合併後指向 mem_...；拒絕時寫理由
 
 `get_context` 只回傳**索引與摘要**；細節由 agent 自行以 `recall` 調閱，保持簡單。
 
+**檢索**：BM25 關鍵字（D25）為基礎；設定本地 embedding 端點後，與語意相似度混合（D26），
+補足跨語言（英文查詢、中文記憶）與換句話說。embedding 只在本機計算，連不上時自動退回純 BM25。
+
+```sh
+SUBSTRATE_EMBED_URL=http://127.0.0.1:11434 SUBSTRATE_EMBED_MODEL=qwen3-embedding:0.6b substrate serve --http
+```
+
 **讀取路徑 = 純 MCP 拉取。** daemon 在連線時透過 MCP `instructions` 欄位動態提供一份**精簡核心摘要**
 （語言、自主邊界、反模式、如何與何時提交記憶），支援的 client（如 Claude Code）會自動注入系統提示；
 細節再以 `get_context` / `recall` 取得。不修改各 agent 的設定檔，單一來源。
