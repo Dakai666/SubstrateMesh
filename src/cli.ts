@@ -15,7 +15,7 @@ import {
   transitionProposal,
 } from "./proposals.js";
 import { buildServer, VERSION } from "./server.js";
-import { addToken, loadTokens, revokeToken } from "./tokens.js";
+import { addGrant, addToken, listGrants, loadTokens, parseGrantTtl, revokeGrants, revokeToken } from "./tokens.js";
 import { DISCLOSURES, LAYERS, type Actor, type Disclosure, type Layer } from "./types.js";
 import { Vault } from "./vault.js";
 import { renderViews } from "./views.js";
@@ -30,6 +30,9 @@ const HELP = `substrate ${VERSION} — 個人上下文基質
                                                  常駐 daemon，多 agent 以 bearer token 連線
   substrate token add <agent> [--role agent|keeper] [--clearance profile]
   substrate token list | revoke <agent>
+  substrate keeper grant [--ttl 1h]              開一段審查時段授權（上限 8h）：時段內 Keeper 經你在對話中
+                                                 同意後，可以合併它自己提交的提案；憲法層仍只能由你合併
+  substrate keeper [grants] | revoke             列出有效授權／提早收回全部授權
   substrate proposals [list] [--status pending]  使用者審查記憶 PR
   substrate proposals show <id>
   substrate proposals merge <id> [<id> ...] [--note ..] [--layer ..]
@@ -146,7 +149,9 @@ async function main() {
         role === "keeper" ? "private" : "profile",
         "clearance",
       );
-      const server = await buildServer(vault, { name: agent, role, clearance }, str(a.flags.session));
+      const server = await buildServer(vault, { name: agent, role, clearance }, str(a.flags.session), {
+        tokensFile: tokensPath(a),
+      });
       await server.connect(new StdioServerTransport());
       return;
     }
@@ -173,6 +178,26 @@ async function main() {
       for (const t of (await loadTokens(file)).tokens) {
         console.log(`${t.agent}\t${t.role}\t${t.clearance}\t${t.created_at}`);
       }
+      return;
+    }
+    case "keeper": {
+      const file = tokensPath(a);
+      if (sub === "grant") {
+        const { token, grant } = await addGrant(file, parseGrantTtl(str(a.flags.ttl) ?? "1h"));
+        console.log(
+          `已開啟審查時段授權 ${grant.id}，有效至 ${grant.expires_at}。token 只會顯示這一次：\n${token}\n` +
+            "把 token 交給 Keeper；它只能在你於對話中同意後，用來合併它自己提交的提案。",
+        );
+        return;
+      }
+      if (sub === "revoke") {
+        console.log(`已收回 ${await revokeGrants(file)} 個有效授權。`);
+        return;
+      }
+      if (sub !== undefined && sub !== "grants") throw new Error(`未知的 keeper 子命令：${sub}`);
+      const grants = await listGrants(file);
+      if (!grants.length) console.log("沒有有效的審查時段授權。");
+      for (const g of grants) console.log(`${g.id}\t至 ${g.expires_at}`);
       return;
     }
     case "proposals": {

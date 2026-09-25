@@ -273,6 +273,8 @@ export async function mergeProposal(
   id: string,
   note?: string,
   overrides: MergeOverrides = {},
+  /** 已由呼叫端驗證的審查時段授權；只放寬「不能合併自己的提案」，不放寬憲法層 */
+  grant?: { id: string },
 ): Promise<{ memory: string; warnings: string[] }> {
   if (actor.role === "agent") throw new PolicyError("只有 Keeper 或使用者可以審查提案。");
   // 讀取、驗證與寫入都在同一個序列化區段內：同一提案不會被合併兩次，
@@ -281,8 +283,11 @@ export async function mergeProposal(
     const p = await loadReviewable(vault, actor, id);
     const m = p.meta;
 
-    if (actor.role === "keeper" && m.proposer === actor.name) {
-      throw new PolicyError("職責分離：Keeper 不能合併自己提交的提案，需由使用者裁決。");
+    const ownProposal = actor.role === "keeper" && m.proposer === actor.name;
+    if (ownProposal && !grant) {
+      throw new PolicyError(
+        "職責分離：Keeper 不能合併自己提交的提案，需由使用者裁決（或在使用者同意後附上審查時段授權 grant）。",
+      );
     }
     const layer = overrides.layer ?? m.suggested_layer;
     assertLayerAllowed(m.voice, layer);
@@ -399,11 +404,21 @@ export async function mergeProposal(
     }
 
     m.status = "merged";
-    m.resolution = { by: actor.name, role: actor.role, at: now, note, memory: memoryId };
+    const grantId = ownProposal ? grant?.id : undefined;
+    m.resolution = { by: actor.name, role: actor.role, at: now, note, memory: memoryId, grant: grantId };
     if (note) p.thread.push({ at: now, author: actor.name, role: actor.role, text: `合併：${note}` });
+    if (grantId) {
+      p.thread.push({ at: now, author: actor.name, role: actor.role, text: `憑使用者的審查時段授權 ${grantId} 合併自己的提案。` });
+    }
     paths.push(await vault.saveProposal(p));
     paths.push(
-      await vault.appendEvent({ type: "proposal.merged", actor: actor.name, proposal: m.id, memory: memoryId }),
+      await vault.appendEvent({
+        type: "proposal.merged",
+        actor: actor.name,
+        proposal: m.id,
+        memory: memoryId,
+        ...(grantId ? { grant: grantId } : {}),
+      }),
     );
     return { result: { memory: memoryId, warnings }, paths };
   });

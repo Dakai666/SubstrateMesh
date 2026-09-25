@@ -12,6 +12,7 @@ import {
   submitRelink,
   transitionProposal,
 } from "./proposals.js";
+import { loadTokens, verifyGrant } from "./tokens.js";
 import { DISCLOSURES, KINDS, LAYERS, LINK_RELS, PROPOSAL_STATUSES, VOICES, type Actor } from "./types.js";
 import type { Vault } from "./vault.js";
 
@@ -75,7 +76,17 @@ const linksShape = z
  * 依呼叫者身分建立 MCP server。身分由 transport 層（token 或啟動參數）決定，
  * agent 無法自報為 Keeper。
  */
-export async function buildServer(vault: Vault, actor: Actor, session?: string): Promise<McpServer> {
+export interface ServerOptions {
+  /** token 設定檔；審查時段授權（grant）存放於此。未提供時 merge_proposal 不接受 grant */
+  tokensFile?: string;
+}
+
+export async function buildServer(
+  vault: Vault,
+  actor: Actor,
+  session?: string,
+  opts: ServerOptions = {},
+): Promise<McpServer> {
   const server = new McpServer(
     { name: SERVER_NAME, version: VERSION },
     { instructions: await buildInstructions(vault, actor) },
@@ -216,11 +227,11 @@ export async function buildServer(vault: Vault, actor: Actor, session?: string):
       }),
   );
 
-  if (actor.role !== "agent") registerReviewTools(server, vault, actor);
+  if (actor.role !== "agent") registerReviewTools(server, vault, actor, opts);
   return server;
 }
 
-function registerReviewTools(server: McpServer, vault: Vault, actor: Actor) {
+function registerReviewTools(server: McpServer, vault: Vault, actor: Actor, opts: ServerOptions) {
   server.registerTool(
     "list_proposals",
     {
@@ -275,9 +286,15 @@ function registerReviewTools(server: McpServer, vault: Vault, actor: Actor) {
     {
       title: "合併記憶 PR",
       description:
-        "合併提案並寫入知識。不能合併自己提交的提案；觸及憲法層的提案只能由使用者合併（Keeper 請改用 escalate_proposal）。可用 overrides 調整層級、主張、信心度等。",
+        "合併提案並寫入知識。不能合併自己提交的提案，除非使用者已在對話中同意、並給了審查時段授權（grant）；觸及憲法層的提案只能由使用者合併（Keeper 請改用 escalate_proposal）。可用 overrides 調整層級、主張、信心度等。",
       inputSchema: {
         id: z.string(),
+        grant: z
+          .string()
+          .optional()
+          .describe(
+            "使用者給的審查時段授權（sg_…）。只在合併你自己提交、且使用者已在對話中逐條討論並同意的提案時附上",
+          ),
         note: z.string().optional().describe("裁決理由"),
         overrides: z
           .object({
@@ -296,9 +313,16 @@ function registerReviewTools(server: McpServer, vault: Vault, actor: Actor) {
           .optional(),
       },
     },
-    ({ id, note, overrides }) =>
+    ({ id, note, overrides, grant }) =>
       guard(async () => {
-        const r = await mergeProposal(vault, actor, id, note, overrides ?? {});
+        let verified: { id: string } | undefined;
+        if (grant) {
+          if (!opts.tokensFile) throw new PolicyError("這個 server 沒有設定 token 檔，無法驗證審查時段授權。");
+          const g = verifyGrant(await loadTokens(opts.tokensFile), grant, new Date(vault.nowIso()));
+          if (!g) throw new PolicyError("審查時段授權無效或已過期；請使用者重新執行 substrate keeper grant。");
+          verified = { id: g.id };
+        }
+        const r = await mergeProposal(vault, actor, id, note, overrides ?? {}, verified);
         return [`已合併 ${id} → ${r.memory}`, ...r.warnings.map((w) => `注意：${w}`)].join("\n");
       }),
   );
