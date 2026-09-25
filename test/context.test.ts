@@ -144,4 +144,29 @@ describe("buildInstructions", () => {
     expect(ins).toContain("偏好繁體中文回覆");
     expect(ins).not.toContain("畫像等級的偏好");
   });
+
+  it("開場指示明確要求先呼叫 get_context", async () => {
+    const v = await tempVault();
+    const ins = await buildInstructions(v, claude);
+    expect(ins.startsWith("SubstrateMesh 是使用者本人擁有的長期記憶基質。")).toBe(true);
+    expect(ins).toContain("第一個實質動作之前");
+    expect(ins).toContain("名片目前是空的");
+  });
+
+  it("名片後列出未列出的條目數，依呼叫者權限計算", async () => {
+    const v = await tempVault();
+    await seed(v, { claim: "偏好繁體中文回覆", disclosure: "card" });
+    await seed(v, { claim: "畫像等級的偏好", disclosure: "profile" });
+    await seed(v, { claim: "一次 review 的教訓", suggested_layer: "experience", disclosure: "card" });
+    await seed(v, { claim: "私密條目", disclosure: "private" });
+
+    // claude（profile）：名片列出 1 條；看得到但未列出的是 profile 偏好與 card 經驗，私密不算
+    const forClaude = await buildInstructions(v, claude);
+    expect(forClaude).toContain("以上是名片，不是全部：另有偏好 1 條、經驗 1 條未列出");
+
+    // loom（card）：只看得到 card 級，profile 偏好不計入
+    const forLoom = await buildInstructions(v, loom);
+    expect(forLoom).toContain("另有經驗 1 條未列出");
+    expect(forLoom).not.toContain("偏好 1 條");
+  });
 });
