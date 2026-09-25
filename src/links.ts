@@ -122,7 +122,7 @@ export function suggestLinks(
   opts: { vectors: Float32Array[] | null; minSimilarity?: number; limit?: number },
 ): LinkSuggestion[] {
   const method = opts.vectors ? "embedding" : "bm25";
-  const min = opts.minSimilarity ?? (opts.vectors ? 0.72 : 0.35);
+  const min = opts.minSimilarity ?? (opts.vectors ? 0.72 : 0.15);
   const sim = opts.vectors ? embeddingMatrix(opts.vectors) : bm25Matrix(mems);
   const out: LinkSuggestion[] = [];
   for (let i = 0; i < mems.length; i++) {
