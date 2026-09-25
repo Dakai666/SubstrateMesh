@@ -14,7 +14,8 @@
 - 本機常駐 daemon（launchd `local.substrate.daemon`）與 `substrate` CLI **直接執行這個資料夾的 `dist/cli.js`**。
   在功能分支上 `npm run build`，等於把尚未合併的程式交給正式環境（daemon 重啟時就會載入）。
   需要實際跑程式時用 `npx tsx src/cli.ts ...`；build 只在 main 上做。
-- 不要自行重啟或停止 daemon：那是 agent 賴以運作的環境，由使用者執行。
+- 即使在 main 上，build 期間 daemon 若剛好重啟也可能載到半成品。build 與 daemon 重啟的時機由使用者決定；
+  agent 不自行重啟或停止 daemon（那是 agent 賴以運作的環境）。
 
 ## Keeper 規格：正本與同步
 

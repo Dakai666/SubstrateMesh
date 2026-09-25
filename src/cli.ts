@@ -33,10 +33,11 @@ const HELP = `substrate ${VERSION} — 個人上下文基質
   substrate proposals [list] [--status pending]  使用者審查記憶 PR
   substrate proposals show <id>
   substrate proposals merge <id> [<id> ...] [--note ..] [--layer ..]
+                                                 多筆時逐筆合併；中途失敗會停下，已合併的不會回復
   substrate proposals reject|defer <id> --note <理由>
   substrate proposals comment <id> --note <內容>
   substrate import <回覆檔> --source <AI 名稱>     匯入問卷回覆，轉為記憶 PR
-  substrate links suggest [--min 0.72] [--limit 20]
+  substrate links suggest [--min <相似度>] [--limit 20]
                                                  列出相似但尚未建立關聯的條目（Keeper 整理用）
   substrate tags                                 標籤詞彙表與可能的同義標籤
   substrate expire                               封存到期知識
@@ -235,7 +236,7 @@ async function main() {
       return;
     }
     case "links": {
-      if (sub !== "suggest") throw new Error("用法：substrate links suggest [--min 0.72] [--limit 20]");
+      if (sub !== "suggest") throw new Error("用法：substrate links suggest [--min <相似度>] [--limit 20]");
       const vault = withSemantic(await Vault.open(vaultPath(a)));
       const min = str(a.flags.min);
       const limit = str(a.flags.limit);

@@ -140,11 +140,12 @@ async function visibleConstitution(vault: Vault, actor: Actor, snap?: Snapshot):
 export async function semanticCorpus(
   vault: Vault,
   snap?: Snapshot,
-): Promise<{ texts: string[]; memories: Memory[] }> {
+): Promise<{ texts: string[]; memories: Memory[]; memoryTexts: string[] }> {
   const now = vault.now();
   const { memories: all, docs } = snap ?? (await snapshot(vault));
   const memories = all.filter((m) => isActive(m.meta, now));
-  return { texts: [...docs.map(docText), ...memories.map(memoryText)], memories };
+  const memoryTexts = memories.map(memoryText);
+  return { texts: [...docs.map(docText), ...memoryTexts], memories, memoryTexts };
 }
 
 async function rank(vault: Vault, snap: Snapshot, items: Memory[], query: string): Promise<Memory[]> {

@@ -11,6 +11,12 @@ import {
   type ProposalMeta,
 } from "./types.js";
 
+/** 候選關聯的相似度下限（依實際 vault 校準，見 D27） */
+export const SUGGEST_MIN_EMBEDDING = 0.72;
+export const SUGGEST_MIN_BM25 = 0.15;
+/** 同義標籤候選的 cosine 下限 */
+export const SIMILAR_TAG_MIN = 0.68;
+
 /** 從這一端看的關係名稱 */
 export const REL_OUT: Record<LinkRel, string> = {
   derived_from: "源自",
@@ -78,7 +84,10 @@ export function neighbors(m: Memory, pool: Memory[]): Neighbor[] {
   return out.sort((a, b) => Number(b.label.startsWith("⚠")) - Number(a.label.startsWith("⚠")));
 }
 
-/** 提案對 target 的標籤／關聯變更，給審查畫面用 */
+/**
+ * 提案對 target 的標籤／關聯變更，給審查畫面用。
+ * 沒有 target（create）時，要移除的標籤仍照列，讓審查者看到提案原本的意圖。
+ */
 export function describeLinkChanges(p: ProposalMeta, target: Memory | null): string[] {
   const lines: string[] = [];
   const have = new Set(target?.meta.tags ?? []);
@@ -122,7 +131,8 @@ export function suggestLinks(
   opts: { vectors: Float32Array[] | null; minSimilarity?: number; limit?: number },
 ): LinkSuggestion[] {
   const method = opts.vectors ? "embedding" : "bm25";
-  const min = opts.minSimilarity ?? (opts.vectors ? 0.72 : 0.15);
+  const min = opts.minSimilarity ?? (opts.vectors ? SUGGEST_MIN_EMBEDDING : SUGGEST_MIN_BM25);
+  // 兩兩比較是 O(n²)：個人規模（數百條）足夠，上千條時再考慮 ANN（見 D27）
   const sim = opts.vectors ? embeddingMatrix(opts.vectors) : bm25Matrix(mems);
   const out: LinkSuggestion[] = [];
   for (let i = 0; i < mems.length; i++) {
@@ -141,12 +151,12 @@ function embeddingMatrix(vs: Float32Array[]): number[][] {
 
 function bm25Matrix(mems: Memory[]): number[][] {
   const fields = (m: Memory) => [[m.meta.claim, 1]] as [string, number][];
-  const rows = mems.map((m) => {
+  const rows = mems.map((m, i) => {
     const s = score(mems, fields, m.meta.claim);
-    const self = s[mems.indexOf(m)] || 1;
+    const self = s[i] || 1;
     return s.map((x) => x / self);
   });
-  // 對稱化：取兩個方向的平均
+  // 對稱化：取兩個方向的平均（對角線是自己對自己，suggestLinks 只取 i < j）
   return rows.map((r, i) => r.map((x, j) => (x + rows[j]![i]!) / 2));
 }
 
@@ -176,7 +186,7 @@ export function tagUsage(mems: Memory[]): TagUsage[] {
 export function similarTags(
   tags: string[],
   vectors: Float32Array[],
-  minSimilarity = 0.68,
+  minSimilarity = SIMILAR_TAG_MIN,
 ): TagVocabulary["similar"] {
   const out: TagVocabulary["similar"] = [];
   for (let i = 0; i < tags.length; i++) {

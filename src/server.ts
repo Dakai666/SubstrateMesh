@@ -2,6 +2,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { buildInstructions, getContext, recall } from "./context.js";
 import { linkChangeSection, linkSuggestionReport, tagReport } from "./curate.js";
+import { SUGGEST_MIN_BM25, SUGGEST_MIN_EMBEDDING } from "./links.js";
 import {
   PolicyError,
   commentProposal,
@@ -287,7 +288,10 @@ function registerReviewTools(server: McpServer, vault: Vault, actor: Actor) {
             scope: scopeShape,
             disclosure: z.enum(DISCLOSURES).optional(),
             ttl: z.string().regex(/^\d+[hdw]$/).nullable().optional(),
-            tags: z.array(z.string()).optional().describe("取代提案的標籤（整理詞彙用）"),
+            tags: z
+              .array(z.string())
+              .optional()
+              .describe("合併後條目的最終標籤（完整取代，含 target 原有的；整理詞彙用）"),
           })
           .optional(),
       },
@@ -306,7 +310,12 @@ function registerReviewTools(server: McpServer, vault: Vault, actor: Actor) {
       description:
         "找出彼此相似、但尚未建立關聯的知識對（有 embedding 時用語意相似度，否則 BM25），逐組判斷是重複、矛盾、衍生或相關。確認後以提案落地；Keeper 自己提的提案需由使用者合併。",
       inputSchema: {
-        min_similarity: z.number().min(0).max(1).optional().describe("相似度下限；embedding 預設 0.72、BM25 預設 0.15"),
+        min_similarity: z
+          .number()
+          .min(0)
+          .max(1)
+          .optional()
+          .describe(`相似度下限；embedding 預設 ${SUGGEST_MIN_EMBEDDING}、BM25 預設 ${SUGGEST_MIN_BM25}`),
         limit: z.number().int().min(1).max(100).optional().describe("預設 20"),
       },
       annotations: { readOnlyHint: true },

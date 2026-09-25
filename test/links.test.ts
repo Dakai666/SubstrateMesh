@@ -7,6 +7,7 @@ import {
   mergeProposal,
   submitProposal,
   submitRelink,
+  transitionProposal,
   type SubmitInput,
 } from "../src/proposals.js";
 import { MemorySchema } from "../src/types.js";
@@ -167,6 +168,75 @@ describe("提案與合併", () => {
     const m = (await v.readMemory(memory))!.meta;
     expect(m.tags).toEqual(["life", "daily"]);
     expect(m.links).toEqual([{ to: other, rel: "related" }]);
+  });
+
+  it("supersede 的標籤是在舊版上增加，不是完整取代", async () => {
+    const v = await tempVault();
+    const old = await seed(v, { claim: "舊版", tags: ["life", "coffee"] });
+    const { proposal } = await submitProposal(v, claude, {
+      claim: "新版",
+      kind: "preference",
+      voice: "stated",
+      suggested_layer: "preference",
+      confidence: 0.7,
+      action: "supersede",
+      target: old,
+      tags: ["daily"],
+      remove_tags: ["coffee"],
+    });
+    const { memory } = await mergeProposal(v, keeper, proposal);
+    expect((await v.readMemory(memory))!.meta.tags).toEqual(["life", "daily"]);
+  });
+
+  it("overrides.tags 是合併後的最終標籤（完整取代）", async () => {
+    const v = await tempVault();
+    const a = await seed(v, { claim: "寫作要直接", tags: ["寫作", "style"] });
+    const { proposal } = await submitRelink(v, claude, { target: a, tags: ["Writing"] });
+    await mergeProposal(v, keeper, proposal, "統一詞彙", { tags: ["writing", "style"] });
+    expect((await v.readMemory(a))!.meta.tags).toEqual(["writing", "style"]);
+    const created = await seed(v, { claim: "新條目", tags: ["x"] });
+    expect((await v.readMemory(created))!.meta.tags).toEqual(["x"]);
+  });
+
+  it("同一 target 的並行合併不會互相覆蓋", async () => {
+    const v = await tempVault();
+    const a = await seed(v, { claim: "條目 A" });
+    const b = await seed(v, { claim: "條目 B" });
+    const c = await seed(v, { claim: "條目 C" });
+    const p1 = (await submitRelink(v, claude, { target: a, tags: ["one"], links: [{ to: b, rel: "related" }] })).proposal;
+    // 同一 target 的第二個 relink 會併入第一個（相同主張視為佐證）
+    expect((await submitRelink(v, claude, { target: a, tags: ["uno"] })).proposal).toBe(p1);
+    const p2 = (
+      await submitProposal(v, claude, {
+        claim: "條目 A（改寫）",
+        kind: "preference",
+        voice: "stated",
+        suggested_layer: "preference",
+        confidence: 0.7,
+        action: "update",
+        target: a,
+        tags: ["two"],
+        links: [{ to: c, rel: "refines" }],
+      })
+    ).proposal;
+    await Promise.all([mergeProposal(v, keeper, p1), mergeProposal(v, keeper, p2)]);
+    const m = (await v.readMemory(a))!.meta;
+    expect(m.claim).toBe("條目 A（改寫）");
+    expect(m.tags.sort()).toEqual(["one", "two", "uno"]);
+    expect(m.links.map((l) => l.to).sort()).toEqual([b, c].sort());
+  });
+
+  it("同一提案並行合併兩次，只有一次成功", async () => {
+    const v = await tempVault();
+    const a = await seed(v, { claim: "條目 A" });
+    const { proposal } = await submitRelink(v, claude, { target: a, tags: ["once"] });
+    const results = await Promise.allSettled([
+      mergeProposal(v, keeper, proposal),
+      mergeProposal(v, user, proposal),
+      transitionProposal(v, keeper, proposal, "rejected", "重複"),
+    ]);
+    expect(results.filter((r) => r.status === "fulfilled")).toHaveLength(1);
+    expect((await v.readProposal(proposal))!.meta.status).toBe("merged");
   });
 
   it("相同主張的佐證會併入標籤", async () => {

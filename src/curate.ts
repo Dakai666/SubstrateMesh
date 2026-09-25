@@ -13,8 +13,9 @@ export async function linkSuggestionReport(
 ): Promise<string> {
   const corpus = await semanticCorpus(vault);
   const all = (await vault.semantic?.vectors(corpus.texts)) ?? null;
-  // 語料前段是憲法文件，後段才是條目
-  const vectors = all ? all.slice(all.length - corpus.memories.length) : null;
+  // 依文字對回條目，不依賴語料中憲法文件與條目的排列順序
+  const byText = all ? new Map(corpus.texts.map((t, i) => [t, all[i]!])) : null;
+  const vectors = byText ? corpus.memoryTexts.map((t) => byText.get(t)!) : null;
   const list = suggestLinks(corpus.memories, { vectors, ...opts });
   const how = vectors ? "embedding cosine" : "BM25（未啟用或連不上 embedding）";
   if (!list.length) return `沒有找到尚未建立關聯的相似條目（${how}）。`;
@@ -28,6 +29,7 @@ export async function linkSuggestionReport(
   return out.join("\n");
 }
 
+/** withSimilar：是否附同義標籤候選。agent 只看詞彙，相似建議留給 Keeper 整理 */
 export async function tagReport(vault: Vault, actor: Actor, withSimilar: boolean): Promise<string> {
   const usage = tagUsage(await visibleMemories(vault, actor));
   if (!usage.length) return "目前還沒有任何標籤。";

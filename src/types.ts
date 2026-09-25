@@ -48,6 +48,7 @@ export function normalizeTags(tags: string[]): string[] {
 const TagsSchema = z.array(z.string()).default([]).transform(normalizeTags);
 
 const MEMORY_ID = /^mem_[0-9A-Z]{26}$/;
+const PROPOSAL_ID = /^prop_[0-9A-Z]{26}$/;
 
 export const LinkSchema = z.object({
   to: z.string().regex(MEMORY_ID),
@@ -110,7 +111,7 @@ export const ResolutionSchema = z.object({
 });
 
 export const ProposalSchema = z.object({
-  id: z.string().regex(/^prop_[0-9A-Z]{26}$/),
+  id: z.string().regex(PROPOSAL_ID),
   status: z.enum(PROPOSAL_STATUSES),
   proposer: z.string(),
   submitted_at: z.string(),
@@ -125,7 +126,7 @@ export const ProposalSchema = z.object({
   confidence: z.number().min(0).max(1),
   ttl: z.string().regex(/^\d+[hdw]$/).nullable().default(null),
   evidence: z.array(EvidenceSchema).default([]),
-  /** create／supersede：新條目的完整標籤與關聯；update／relink：要加上的 */
+  /** create：新條目的完整標籤與關聯；其他動作：要加上的（supersede 先承接舊版再套用） */
   tags: TagsSchema,
   links: z.array(LinkSchema).default([]),
   /** update／relink：要移除的標籤與關聯 */
