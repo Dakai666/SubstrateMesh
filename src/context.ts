@@ -303,8 +303,30 @@ export const SUBMIT_GUIDE = `## 何時提交記憶（propose_memory）
 發現兩條知識互相矛盾、一條源自另一條，或想補標籤時，用 propose_links 提出。recall 裡標示「⚠ 張力」的關聯代表兩條都成立、彼此拉扯，兩者都要考慮。
 你只能提案，不能直接改寫知識；Keeper 會審查。`;
 
+export const OPENING = `SubstrateMesh 是使用者本人擁有的長期記憶基質。
+每個 session 在第一個實質動作之前，先呼叫一次 get_context(task=一句話描述你要做的事)；任務明顯轉換時再呼叫一次。
+凡是替使用者做的事都算：寫程式、分析 repo、寫文件、做決策建議。只有純閒聊或一句話的事實問答可以略過。
+下方名片只是摘要，不含領域偏好、過去的教訓與專案脈絡；那些只能透過 get_context／recall 取得。`;
+
+/** 收尾提示預留的 token：名片填滿時仍放得下（預算同步上調，名片可用空間與改版前相同） */
+const CLOSING_RESERVE = 60;
+
+/**
+ * 名片之後的收尾提示：列出呼叫者看得到、但名片沒列出的條目數，讓 agent 知道 get_context 還拿得到什麼。
+ * 數量依呼叫者自己的權限計算，不透露看不到的條目。
+ */
+function closingLine(unlisted: Memory[], hasCore: boolean): string {
+  const counts = (["constitution", "preference", "experience"] as const)
+    .map((l) => [LAYER_LABEL[l], unlisted.filter((m) => m.meta.layer === l).length] as const)
+    .filter(([, n]) => n > 0)
+    .map(([label, n]) => `${label} ${n} 條`);
+  const head = hasCore ? "以上是名片，不是全部" : "名片目前是空的";
+  const rest = counts.length ? `：另有${counts.join("、")}未列出` : "";
+  return `（${head}${rest}。與本次任務相關的偏好與教訓，請以 get_context 取得。）`;
+}
+
 /** 連線時經 MCP instructions 注入的精簡核心摘要（僅限名片等級） */
-export async function buildInstructions(vault: Vault, actor: Actor, maxTokens = 900): Promise<string> {
+export async function buildInstructions(vault: Vault, actor: Actor, maxTokens = 1050): Promise<string> {
   const cardActor: Actor = { ...actor, clearance: "card" };
   const snap = await snapshot(vault);
   const docs = await visibleConstitution(vault, cardActor, snap);
@@ -314,12 +336,8 @@ export async function buildInstructions(vault: Vault, actor: Actor, maxTokens = 
     (await visibleMemories(vault, cardActor, snap)).filter((m) => m.meta.layer !== "experience"),
     "",
   );
-  const parts = [
-    "SubstrateMesh 是使用者本人擁有的長期記憶基質。開始處理與使用者相關的任務前，先呼叫 get_context(task) 取得關於使用者的索引，需要細節再用 recall。",
-    USAGE_GUIDE,
-    SUBMIT_GUIDE,
-  ];
-  let used = parts.reduce((n, p) => n + estimateTokens(p), 0);
+  const parts = [OPENING, USAGE_GUIDE, SUBMIT_GUIDE];
+  let used = parts.reduce((n, p) => n + estimateTokens(p), 0) + CLOSING_RESERVE;
   const core: string[] = [];
   for (const d of docs) {
     const s = `### ${d.title}\n${d.body}`;
@@ -327,12 +345,16 @@ export async function buildInstructions(vault: Vault, actor: Actor, maxTokens = 
     core.push(s);
     used += estimateTokens(s);
   }
+  const listed = new Set<string>();
   for (const m of mems) {
     const s = formatLine(m.meta);
     if (used + estimateTokens(s) > maxTokens) break;
     core.push(s);
+    listed.add(m.meta.id);
     used += estimateTokens(s);
   }
   if (core.length) parts.push(`## 核心摘要（名片）\n${core.join("\n")}`);
+  const unlisted = (await visibleMemories(vault, actor, snap)).filter((m) => !listed.has(m.meta.id));
+  parts.push(closingLine(unlisted, core.length > 0));
   return parts.join("\n\n");
 }

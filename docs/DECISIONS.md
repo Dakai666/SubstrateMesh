@@ -31,6 +31,7 @@
 | D25 | 關鍵字檢索 | CJK 單字（低權重）+ 二字組、常用簡繁正規化、英文輕度詞形還原，BM25 計分；比對範圍含 claim、領域／情境、類型中文名、內文、證據原話；低於最高分 25% 的結果視為雜訊 | 零依賴；跨語言與同義詞需語意檢索（本地 embedding）補足 |
 | D26 | 語意檢索 | 選用的本地 embedding（Ollama／OpenAI 相容端點，環境變數設定）；BM25 以最高分正規化，cosine 嚴格低於絕對下限（預設 0.4）視為 0、其餘以〔下限, max(最高, 下限+0.1)〕線性映射（相對於本次語料；最小區間避免窄區間放大微小差距），兩者以 α=0.5 加權；25% 相對門檻套在合併分數上。向量以內容 hash 快取於 vault `.index/`（不進 git、不經 MCP 暴露），對全部 active 條目建立，計分只限可見條目；連不上時退回純 BM25 並暫停 60 秒 | 語意只加分不扣分：實測 `SOUL.md`、`喵吉` 等專有名詞的正確命中 cosine 低於下限，拿 cosine 否決 BM25 會誤殺。下限依 qwen3-embedding:0.6b 在實際 vault 上校準（相關 0.40–0.55、無關 ≤ 0.39），換模型或語料規模大幅變動需重新校準。每次查詢對全語料算 cosine（O(n)），條目上千時再考慮 ANN 或子集計算 |
 | D27 | 標籤與關聯 | 條目新增 `tags` 與 `links`（derived_from／contradicts／refines／example_of／related）；雙向關係只存一端。新增 `relink` 提案（只改標籤與關聯），agent 以 `propose_links` 提出；`recall` 支援標籤篩選並附一跳關聯，張力優先顯示。關聯只從呼叫者可見的條目取；提交時看不到與不存在的目標回報相同訊息。Keeper 以 `suggest_links`（embedding 預設 0.72，BM25 0.15；依實際 vault 校準）與 `list_tags`（同義候選 0.68）整理，確認後仍走提案 | 落實「記錄張力與例外」；整理工具只列候選，不直接改寫，維持職責分離。單詞標籤的 embedding 相似度不可靠（實測 life/loom > 寫作/writing），因此同義標籤不自動合併。`suggest_links` 為兩兩比較 O(n²)，條目上千時再考慮 ANN |
+| D28 | instructions 開場與收尾 | 開場段明訂 get_context 的呼叫時點（每個 session 第一個實質動作前一次、任務轉換時再一次）與範圍（凡替使用者做的事都算，純閒聊與一句話問答除外），並說明名片不含領域偏好、教訓與專案脈絡；名片後加收尾提示，列出呼叫者看得到但名片未列出的條目數（依層級，依呼叫者自身權限計算）。預算由 900 調為 1050、收尾預留 60，名片可用空間與改版前相同 | 實際樣本：一個已注入 instructions 的 Claude Code session 把「分析使用者的 repo」判為與使用者無關而沒有呼叫 get_context；名片列在最後、讀起來完整，造成「已經夠了」的錯覺。用具體數字取代語氣強調。效果以 access log 中各 agent 的 `get_context` 次數對 `connect`（MCP initialize）次數之比，改版前後比較 |
 
 ## 實作狀態
 

@@ -1,5 +1,5 @@
 import type { AddressInfo } from "node:net";
-import { mkdtemp } from "node:fs/promises";
+import { mkdtemp, readFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
@@ -145,6 +145,18 @@ describe("HTTP daemon", () => {
     expect(p?.meta.proposer).toBe("loom");
     const tools = (await client.listTools()).tools.map((t) => t.name);
     expect(tools).not.toContain("merge_proposal");
+    const log = await readFile(
+      path.join(v.root, ".keeper", "logs", `access-${v.nowIso().slice(0, 7)}.jsonl`),
+      "utf8",
+    );
+    const connects = log
+      .trim()
+      .split("\n")
+      .map((l) => JSON.parse(l))
+      .filter((e) => e.type === "connect");
+    expect(connects).toEqual([
+      expect.objectContaining({ actor: "loom", session: "loom-42", client: "test", client_version: "0" }),
+    ]);
     await client.close();
   });
 });
