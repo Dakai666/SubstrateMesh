@@ -1,4 +1,4 @@
-import { readFile, stat } from "node:fs/promises";
+import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { getContext, recall } from "../src/context.js";
@@ -55,6 +55,23 @@ describe("fuse", () => {
     expect(s[1]).toBeCloseTo(0.25);
     expect(s[2]).toBeCloseTo(0.5); // 只有語意命中
     expect(s[3]).toBe(0); // 低於絕對下限
+  });
+
+  it("alpha=1 等同 BM25 排序；alpha=0 只看語意", () => {
+    const bm = [4, 2, 0];
+    const cos = [0.1, 0.9, 0.8];
+    const pure = fuse(bm, cos, { alpha: 1, minCosine: 0.4 });
+    expect(pure.map((x) => x * 4)).toEqual(bm);
+    const sem = fuse(bm, cos, { alpha: 0, minCosine: 0.4 });
+    expect(sem[0]).toBe(0);
+    expect(sem[1]).toBeGreaterThan(sem[2]!);
+  });
+
+  it("最高 cosine 貼近下限時不把微小差距放大", () => {
+    const s = fuse([0, 0, 0], [0.4, 0.405, 0.41], opts);
+    expect(s[0]).toBe(0);
+    expect(s[1]).toBeCloseTo(0.5 * 0.05);
+    expect(s[2]).toBeCloseTo(0.5 * 0.1);
   });
 
   it("兩者皆命中者排最前", () => {
@@ -140,6 +157,26 @@ describe("向量快取", () => {
     expect(next.documentCalls()[0]!.texts).toHaveLength(2); // 整批重算
   });
 
+  it("快取檔損壞時重建，不讓 recall 失敗", async () => {
+    const v = await tempVault();
+    const id = await seed(v, { claim: "早上習慣喝黑咖啡，不加糖" });
+    await mkdir(path.join(v.root, ".index"), { recursive: true });
+    await writeFile(path.join(v.root, ".index", "embeddings.json"), "{not json");
+    const fake = new FakeEmbedder();
+    v.enableSemantic(fake);
+    expect(await recall(v, claude, { query: "coffee" })).toContain(id);
+    expect(JSON.parse(await readFile(path.join(v.root, ".index", "embeddings.json"), "utf8")).model).toBe("fake-v1");
+  });
+
+  it("送去 embedding 的文字有長度上限", async () => {
+    const v = await tempVault();
+    await seed(v, { claim: "長證據", evidence: [{ source: "chat", quote: "咖啡".repeat(5000), at: "2026-01-01T00:00:00Z" }] });
+    const fake = new FakeEmbedder();
+    v.enableSemantic(fake);
+    await recall(v, claude, { query: "coffee" });
+    expect(Math.max(...fake.documentCalls()[0]!.texts.map((t) => t.length))).toBeLessThanOrEqual(2000);
+  });
+
   it("不同權限的呼叫者共用同一份快取", async () => {
     const v = await tempVault();
     await seed(v, { claim: "早上習慣喝黑咖啡，不加糖" });
@@ -163,6 +200,22 @@ describe("設定", () => {
     });
     expect(s?.embedder.model).toBe("qwen3-embedding:0.6b");
     expect(s?.options).toEqual({ alpha: 0.3, minCosine: 0.4 });
+  });
+
+  it("OpenAI 相容端點的結尾斜線會被正規化", async () => {
+    const seen: string[] = [];
+    const orig = globalThis.fetch;
+    globalThis.fetch = (async (url: string) => {
+      seen.push(url);
+      return new Response(JSON.stringify({ data: [{ embedding: [1, 0] }] }));
+    }) as typeof fetch;
+    try {
+      await new HttpEmbedder({ url: "http://x/v1/embeddings/", model: "m" }).embed(["a"], "query");
+      await new HttpEmbedder({ url: "http://x:11434/", model: "m" }).embed(["a"], "query").catch(() => undefined);
+    } finally {
+      globalThis.fetch = orig;
+    }
+    expect(seen).toEqual(["http://x/v1/embeddings", "http://x:11434/api/embed"]);
   });
 
   it("連不上端點時拋錯（由 SemanticIndex 接住）", async () => {

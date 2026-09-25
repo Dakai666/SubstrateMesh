@@ -40,7 +40,8 @@ const HELP = `substrate ${VERSION} — 個人上下文基質
 
 語意檢索（選用，本地 embedding；未設定則只用 BM25）：
   SUBSTRATE_EMBED_URL=http://127.0.0.1:11434 SUBSTRATE_EMBED_MODEL=qwen3-embedding:0.6b
-  可選 SUBSTRATE_EMBED_ALPHA（BM25 權重，預設 0.5）、SUBSTRATE_EMBED_MIN_COSINE（預設 0.4）
+  可選 SUBSTRATE_EMBED_ALPHA（BM25 權重，預設 0.5）、SUBSTRATE_EMBED_MIN_COSINE（預設 0.4）、
+  SUBSTRATE_EMBED_QUERY_PREFIX（覆寫查詢端前綴；qwen3-embedding 會自動加）
 
 共同參數：
   --vault <路徑>    預設為 $SUBSTRATE_VAULT 或 ~/substrate-vault
