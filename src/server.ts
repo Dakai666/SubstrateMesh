@@ -1,15 +1,18 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { buildInstructions, getContext, recall } from "./context.js";
+import { linkChangeSection, linkSuggestionReport, tagReport } from "./curate.js";
+import { SUGGEST_MIN_BM25, SUGGEST_MIN_EMBEDDING } from "./links.js";
 import {
   PolicyError,
   commentProposal,
   expireMemories,
   mergeProposal,
   submitProposal,
+  submitRelink,
   transitionProposal,
 } from "./proposals.js";
-import { DISCLOSURES, KINDS, LAYERS, PROPOSAL_STATUSES, VOICES, type Actor } from "./types.js";
+import { DISCLOSURES, KINDS, LAYERS, LINK_RELS, PROPOSAL_STATUSES, VOICES, type Actor } from "./types.js";
 import type { Vault } from "./vault.js";
 
 export const SERVER_NAME = "substrate";
@@ -45,6 +48,25 @@ const evidenceShape = z
       quote: z.string().optional().describe("使用者原話，盡量逐字"),
       source: z.string().optional().describe("來源，預設為 <agent>/<session>"),
       at: z.string().optional().describe("ISO 時間，預設為現在"),
+    }),
+  )
+  .optional();
+
+const memId = z.string().regex(/^mem_[0-9A-Z]{26}$/);
+
+const tagsShape = z
+  .array(z.string())
+  .optional()
+  .describe("自由標籤，例如 [writing, blog]；會正規化為小寫。先用 list_tags 看既有詞彙，避免同義詞各寫一個");
+
+const linksShape = z
+  .array(
+    z.object({
+      to: memId.describe("關聯到的 mem_... id"),
+      rel: z
+        .enum(LINK_RELS)
+        .describe("derived_from 源自／contradicts 互相矛盾／refines 細化／example_of 是其範例／related 相關"),
+      note: z.string().optional().describe("一句話說明關聯"),
     }),
   )
   .optional();
@@ -87,16 +109,28 @@ export async function buildServer(vault: Vault, actor: Actor, session?: string):
       inputSchema: {
         id: z.string().optional().describe("mem_... 條目 id"),
         query: z.string().optional().describe("查詢關鍵字，例如「咖啡 飲料 早餐」"),
+        tags: z.array(z.string()).optional().describe("只看同時帶有這些標籤的條目；可單獨使用"),
         limit: z.number().int().min(1).max(30).optional(),
       },
       annotations: { readOnlyHint: true },
     },
-    ({ id, query, limit }) =>
+    ({ id, query, tags, limit }) =>
       guard(async () => {
-        if (!id && !query) throw new PolicyError("請提供 id 或 query。");
-        await vault.logAccess({ type: "recall", actor: actor.name, session, id, query });
-        return recall(vault, actor, { id, query, limit });
+        if (!id && !query && !tags?.length) throw new PolicyError("請提供 id、query 或 tags。");
+        await vault.logAccess({ type: "recall", actor: actor.name, session, id, query, tags });
+        return recall(vault, actor, { id, query, tags, limit });
       }),
+  );
+
+  server.registerTool(
+    "list_tags",
+    {
+      title: "列出標籤詞彙",
+      description: "列出你看得到的知識所使用的標籤與次數。提交 tags 前先看一下，沿用既有詞彙。",
+      inputSchema: {},
+      annotations: { readOnlyHint: true },
+    },
+    () => guard(() => tagReport(vault, actor, actor.role !== "agent")),
   );
 
   server.registerTool(
@@ -118,6 +152,8 @@ export async function buildServer(vault: Vault, actor: Actor, session?: string):
         rationale: z.string().optional().describe("你的觀點與理由"),
         action: z.enum(["create", "update", "supersede", "archive"]).optional().describe("預設 create"),
         target: z.string().optional().describe("update／supersede／archive 時的 mem_... id"),
+        tags: tagsShape,
+        links: linksShape.describe("與其他知識的關聯，例如這條偏好源自哪次教訓、與哪條互相矛盾"),
       },
     },
     (args) =>
@@ -155,6 +191,28 @@ export async function buildServer(vault: Vault, actor: Actor, session?: string):
           session,
         });
         return [`已提交範例 ${r.proposal}。`, ...r.notes].join("\n");
+      }),
+  );
+
+  server.registerTool(
+    "propose_links",
+    {
+      title: "提出標籤或關聯調整",
+      description:
+        "只調整既有知識的標籤或關聯，不改主張，同樣經 Keeper 審查。例如：發現兩條知識互相矛盾（contradicts）、一條偏好源自某次教訓（derived_from）。矛盾不必消解，記下張力即可。",
+      inputSchema: {
+        target: memId.describe("要調整的 mem_... id"),
+        tags: tagsShape,
+        links: linksShape,
+        remove_tags: z.array(z.string()).optional(),
+        remove_links: z.array(z.object({ to: memId, rel: z.enum(LINK_RELS) })).optional(),
+        rationale: z.string().optional().describe("你的觀點與理由"),
+      },
+    },
+    (args) =>
+      guard(async () => {
+        const r = await submitRelink(vault, actor, { ...args, session });
+        return [`已提交 ${r.proposal}，等待 Keeper 審查。`, ...r.notes].join("\n");
       }),
   );
 
@@ -199,6 +257,8 @@ function registerReviewTools(server: McpServer, vault: Vault, actor: Actor) {
         const p = await vault.readProposal(id);
         if (!p) throw new PolicyError(`找不到提案：${id}`);
         const out = [JSON.stringify(p.meta, null, 2)];
+        const changes = await linkChangeSection(vault, p);
+        if (changes) out.push(changes);
         if (p.body) out.push(`## 內容\n${p.body}`);
         if (p.thread.length) {
           out.push(
@@ -228,6 +288,10 @@ function registerReviewTools(server: McpServer, vault: Vault, actor: Actor) {
             scope: scopeShape,
             disclosure: z.enum(DISCLOSURES).optional(),
             ttl: z.string().regex(/^\d+[hdw]$/).nullable().optional(),
+            tags: z
+              .array(z.string())
+              .optional()
+              .describe("合併後條目的最終標籤（完整取代，含 target 原有的；整理詞彙用）"),
           })
           .optional(),
       },
@@ -235,8 +299,28 @@ function registerReviewTools(server: McpServer, vault: Vault, actor: Actor) {
     ({ id, note, overrides }) =>
       guard(async () => {
         const r = await mergeProposal(vault, actor, id, note, overrides ?? {});
-        return `已合併 ${id} → ${r.memory}`;
+        return [`已合併 ${id} → ${r.memory}`, ...r.warnings.map((w) => `注意：${w}`)].join("\n");
       }),
+  );
+
+  server.registerTool(
+    "suggest_links",
+    {
+      title: "候選關聯",
+      description:
+        "找出彼此相似、但尚未建立關聯的知識對（有 embedding 時用語意相似度，否則 BM25），逐組判斷是重複、矛盾、衍生或相關。確認後以提案落地；Keeper 自己提的提案需由使用者合併。",
+      inputSchema: {
+        min_similarity: z
+          .number()
+          .min(0)
+          .max(1)
+          .optional()
+          .describe(`相似度下限；embedding 預設 ${SUGGEST_MIN_EMBEDDING}、BM25 預設 ${SUGGEST_MIN_BM25}`),
+        limit: z.number().int().min(1).max(100).optional().describe("預設 20"),
+      },
+      annotations: { readOnlyHint: true },
+    },
+    ({ min_similarity, limit }) => guard(() => linkSuggestionReport(vault, { minSimilarity: min_similarity, limit })),
   );
 
   for (const [name, to, title, arg] of [

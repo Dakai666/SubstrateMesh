@@ -30,6 +30,7 @@
 | D24 | 問卷收集 | 盲測問卷交給各 AI；回覆經 `substrate import` 轉為提案，原文存於 raw/imports | 第三方轉述不建議入憲法層、推測信心度上限 0.6 |
 | D25 | 關鍵字檢索 | CJK 單字（低權重）+ 二字組、常用簡繁正規化、英文輕度詞形還原，BM25 計分；比對範圍含 claim、領域／情境、類型中文名、內文、證據原話；低於最高分 25% 的結果視為雜訊 | 零依賴；跨語言與同義詞需語意檢索（本地 embedding）補足 |
 | D26 | 語意檢索 | 選用的本地 embedding（Ollama／OpenAI 相容端點，環境變數設定）；BM25 以最高分正規化，cosine 嚴格低於絕對下限（預設 0.4）視為 0、其餘以〔下限, max(最高, 下限+0.1)〕線性映射（相對於本次語料；最小區間避免窄區間放大微小差距），兩者以 α=0.5 加權；25% 相對門檻套在合併分數上。向量以內容 hash 快取於 vault `.index/`（不進 git、不經 MCP 暴露），對全部 active 條目建立，計分只限可見條目；連不上時退回純 BM25 並暫停 60 秒 | 語意只加分不扣分：實測 `SOUL.md`、`喵吉` 等專有名詞的正確命中 cosine 低於下限，拿 cosine 否決 BM25 會誤殺。下限依 qwen3-embedding:0.6b 在實際 vault 上校準（相關 0.40–0.55、無關 ≤ 0.39），換模型或語料規模大幅變動需重新校準。每次查詢對全語料算 cosine（O(n)），條目上千時再考慮 ANN 或子集計算 |
+| D27 | 標籤與關聯 | 條目新增 `tags` 與 `links`（derived_from／contradicts／refines／example_of／related）；雙向關係只存一端。新增 `relink` 提案（只改標籤與關聯），agent 以 `propose_links` 提出；`recall` 支援標籤篩選並附一跳關聯，張力優先顯示。關聯只從呼叫者可見的條目取；提交時看不到與不存在的目標回報相同訊息。Keeper 以 `suggest_links`（embedding 預設 0.72，BM25 0.15；依實際 vault 校準）與 `list_tags`（同義候選 0.68）整理，確認後仍走提案 | 落實「記錄張力與例外」；整理工具只列候選，不直接改寫，維持職責分離。單詞標籤的 embedding 相似度不可靠（實測 life/loom > 寫作/writing），因此同義標籤不自動合併。`suggest_links` 為兩兩比較 O(n²)，條目上千時再考慮 ANN |
 
 ## 實作狀態
 
@@ -40,7 +41,7 @@
 ## 待討論
 
 - [x] `get_context` 的組裝策略：層級優先，層內以 BM25 + 語意混合分數排序（D25、D26）
-- [ ] 知識衝突的判定方法：語意重疊與 scope 交集如何偵測
+- [ ] 知識衝突的判定方法：語意重疊與 scope 交集如何偵測（D27 先以 `suggest_links` 列候選、由 Keeper 判斷）
 - [ ] Keeper 排程頻率與每次運作的成本上限
 - [ ] vault 的遠端備份位置與加密方式
 - [ ] 多 agent 同時寫入 proposals 時的 git 提交策略（daemon 批次 commit）

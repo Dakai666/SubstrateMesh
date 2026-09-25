@@ -22,7 +22,11 @@ export const PROPOSAL_STATUSES = [
   "deferred",
   "escalated",
 ] as const;
-export const PROPOSAL_ACTIONS = ["create", "update", "supersede", "archive"] as const;
+/** relink：只調整標籤或關聯，不改主張 */
+export const PROPOSAL_ACTIONS = ["create", "update", "supersede", "archive", "relink"] as const;
+export const LINK_RELS = ["derived_from", "contradicts", "refines", "example_of", "related"] as const;
+/** 雙向關係：只存在一端，查詢時兩端都顯示 */
+export const SYMMETRIC_RELS: ReadonlySet<LinkRel> = new Set(["contradicts", "related"]);
 export const ROLES = ["agent", "keeper", "user"] as const;
 
 export type Layer = (typeof LAYERS)[number];
@@ -31,6 +35,29 @@ export type Voice = (typeof VOICES)[number];
 export type Disclosure = (typeof DISCLOSURES)[number];
 export type ProposalStatus = (typeof PROPOSAL_STATUSES)[number];
 export type Role = (typeof ROLES)[number];
+export type LinkRel = (typeof LINK_RELS)[number];
+
+export function normalizeTag(t: string): string {
+  return t.normalize("NFKC").trim().toLowerCase().replace(/^#+/, "").replace(/\s+/g, "-");
+}
+
+export function normalizeTags(tags: string[]): string[] {
+  return [...new Set(tags.map(normalizeTag).filter(Boolean))];
+}
+
+const TagsSchema = z.array(z.string()).default([]).transform(normalizeTags);
+
+const MEMORY_ID = /^mem_[0-9A-Z]{26}$/;
+const PROPOSAL_ID = /^prop_[0-9A-Z]{26}$/;
+
+export const LinkSchema = z.object({
+  to: z.string().regex(MEMORY_ID),
+  rel: z.enum(LINK_RELS),
+  note: z.string().optional(),
+});
+export type Link = z.infer<typeof LinkSchema>;
+export const LinkRefSchema = LinkSchema.pick({ to: true, rel: true });
+export type LinkRef = z.infer<typeof LinkRefSchema>;
 
 export const ScopeSchema = z.object({
   domain: z.string().optional(),
@@ -49,7 +76,7 @@ export const EvidenceSchema = z.object({
 export type Evidence = z.infer<typeof EvidenceSchema>;
 
 export const MemorySchema = z.object({
-  id: z.string().regex(/^mem_[0-9A-Z]{26}$/),
+  id: z.string().regex(MEMORY_ID),
   layer: z.enum(LAYERS),
   kind: z.enum(KINDS),
   voice: z.enum(VOICES),
@@ -63,6 +90,8 @@ export const MemorySchema = z.object({
   /** 例如 "30d"、"12h"；從 valid_from 起算 */
   ttl: z.string().regex(/^\d+[hdw]$/).nullable().default(null),
   supersedes: z.array(z.string()).default([]),
+  tags: TagsSchema,
+  links: z.array(LinkSchema).default([]),
   evidence: z.array(EvidenceSchema).default([]),
   created_at: z.string(),
   updated_at: z.string(),
@@ -82,7 +111,7 @@ export const ResolutionSchema = z.object({
 });
 
 export const ProposalSchema = z.object({
-  id: z.string().regex(/^prop_[0-9A-Z]{26}$/),
+  id: z.string().regex(PROPOSAL_ID),
   status: z.enum(PROPOSAL_STATUSES),
   proposer: z.string(),
   submitted_at: z.string(),
@@ -97,6 +126,12 @@ export const ProposalSchema = z.object({
   confidence: z.number().min(0).max(1),
   ttl: z.string().regex(/^\d+[hdw]$/).nullable().default(null),
   evidence: z.array(EvidenceSchema).default([]),
+  /** create：新條目的完整標籤與關聯；其他動作：要加上的（supersede 先承接舊版再套用） */
+  tags: TagsSchema,
+  links: z.array(LinkSchema).default([]),
+  /** update／relink：要移除的標籤與關聯 */
+  remove_tags: TagsSchema,
+  remove_links: z.array(LinkRefSchema).default([]),
   /** 提交者的觀點與推論理由——agent 的聲音記錄於此 */
   rationale: z.string().default(""),
   resolution: ResolutionSchema.nullable().default(null),

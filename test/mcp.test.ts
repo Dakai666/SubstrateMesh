@@ -30,7 +30,7 @@ describe("MCP server", () => {
     const v = await tempVault();
     const client = await connect(v, claude);
     const names = (await client.listTools()).tools.map((t) => t.name).sort();
-    expect(names).toEqual(["get_context", "propose_memory", "recall", "record_example"]);
+    expect(names).toEqual(["get_context", "list_tags", "propose_links", "propose_memory", "recall", "record_example"]);
     expect(client.getInstructions()).toContain("get_context");
   });
 
@@ -63,6 +63,41 @@ describe("MCP server", () => {
     expect(textOf(await agent.callTool({ name: "get_context", arguments: { task: "修 bug" } }))).toContain(
       "犯錯後要減速對齊",
     );
+  });
+
+  it("propose_links → Keeper 看到差異並合併 → recall 帶出關聯", async () => {
+    const v = await tempVault();
+    const agent = await connect(v, claude);
+    const k = await connect(v, keeper);
+    const ids: string[] = [];
+    for (const claim of ["文章語氣要直接", "對長輩寫信要委婉"]) {
+      const r = textOf(
+        await agent.callTool({
+          name: "propose_memory",
+          arguments: { claim, kind: "preference", voice: "stated", suggested_layer: "preference", confidence: 0.8, tags: ["Writing"] },
+        }),
+      );
+      const pid = /prop_[0-9A-Z]{26}/.exec(r)![0];
+      ids.push(/mem_[0-9A-Z]{26}/.exec(textOf(await k.callTool({ name: "merge_proposal", arguments: { id: pid } })))![0]);
+    }
+    const r = textOf(
+      await agent.callTool({
+        name: "propose_links",
+        arguments: { target: ids[1], links: [{ to: ids[0], rel: "contradicts", note: "對象不同" }] },
+      }),
+    );
+    const pid = /prop_[0-9A-Z]{26}/.exec(r)![0];
+    const shown = textOf(await k.callTool({ name: "show_proposal", arguments: { id: pid } }));
+    expect(shown).toContain(`+ 關聯：⚠ 張力（contradicts）→ ${ids[0]}：對象不同`);
+    await k.callTool({ name: "merge_proposal", arguments: { id: pid } });
+    const detail = textOf(await agent.callTool({ name: "recall", arguments: { id: ids[0] } }));
+    expect(detail).toContain(`〔⚠ 張力〕${ids[1]}`);
+    expect(textOf(await agent.callTool({ name: "list_tags", arguments: {} }))).toContain("#writing（2）");
+    expect(textOf(await agent.callTool({ name: "recall", arguments: { tags: ["writing"] } }))).toContain(ids[1]);
+
+    const agentTools = (await agent.listTools()).tools.map((t) => t.name);
+    expect(agentTools).not.toContain("suggest_links");
+    expect(textOf(await k.callTool({ name: "suggest_links", arguments: {} }))).toMatch(/候選關聯|沒有找到/);
   });
 
   it("政策違規以 isError 回報，而不是丟例外", async () => {

@@ -1,6 +1,7 @@
 import type { ConstitutionDoc, Vault } from "./vault.js";
+import { neighbors } from "./links.js";
 import { MIN_RELATIVE_SCORE, fuse, score, type Fields } from "./search.js";
-import { DISCLOSURE_RANK, type Actor, type Layer, type Memory, type MemoryMeta } from "./types.js";
+import { DISCLOSURE_RANK, normalizeTags, type Actor, type Layer, type Memory, type MemoryMeta } from "./types.js";
 
 const LAYER_RANK: Record<Layer, number> = { constitution: 0, preference: 1, experience: 2 };
 const TTL_MS = { h: 3_600_000, d: 86_400_000, w: 604_800_000 } as const;
@@ -46,7 +47,7 @@ function memoryFields(m: Memory): Fields {
   const x = m.meta;
   return [
     [x.claim, 3],
-    [[x.scope.domain ?? "", ...x.scope.contexts].join(" "), 2],
+    [[x.scope.domain ?? "", ...x.scope.contexts, ...x.tags].join(" "), 2],
     [`${x.kind} ${KIND_LABEL[x.kind]} ${LAYER_LABEL[x.layer]}`, 1],
     [m.body, 1],
     [x.evidence.map((e) => e.quote ?? "").join(" "), 1],
@@ -64,7 +65,7 @@ function docFields(d: ConstitutionDoc): Fields {
 const EMBED_TEXT_MAX = 2000;
 
 /** 送去 embedding 的文字：與 memoryFields 對齊，但略過內文（範例全文太長、會稀釋語意） */
-function memoryText(m: Memory): string {
+export function memoryText(m: Memory): string {
   const x = m.meta;
   return [x.claim, [x.scope.domain ?? "", ...x.scope.contexts].join(" "), ...x.evidence.map((e) => e.quote ?? "")]
     .map((s) => s.trim())
@@ -100,15 +101,11 @@ async function relevance(vault: Vault, snap: Snapshot, items: Searchable[], quer
   const bm25 = score(items, (x) => (isMemory(x) ? memoryFields(x) : docFields(x)), query);
   const sem = vault.semantic;
   if (!sem || !query.trim() || !items.length) return bm25;
-  const now = vault.now();
   // 每次查詢對整個語料算 cosine（O(n)）；個人規模足夠，條目上千時再考慮 ANN（見 D26）
-  const corpus = [
-    ...snap.docs.map(docText),
-    ...snap.memories.filter((m) => isActive(m.meta, now)).map(memoryText),
-  ];
-  const cos = await sem.similarities(corpus, query);
+  const corpus = await semanticCorpus(vault, snap);
+  const cos = await sem.similarities(corpus.texts, query);
   if (!cos) return bm25;
-  const byText = new Map(corpus.map((t, i) => [t, cos[i]!]));
+  const byText = new Map(corpus.texts.map((t, i) => [t, cos[i]!]));
   const mine = items.map((x) => byText.get(isMemory(x) ? memoryText(x) : docText(x)) ?? 0);
   return fuse(bm25, mine, sem.options);
 }
@@ -121,7 +118,8 @@ export function formatLine(m: MemoryMeta): string {
     .filter(Boolean)
     .join("·");
   const ctx = m.scope.contexts.length ? ` [情境：${m.scope.contexts.join("、")}]` : "";
-  return `- ${m.id} (${tags}) ${m.claim}${ctx}`;
+  const hashtags = m.tags.length ? ` ${m.tags.map((t) => `#${t}`).join(" ")}` : "";
+  return `- ${m.id} (${tags}) ${m.claim}${ctx}${hashtags}`;
 }
 
 export async function visibleMemories(vault: Vault, actor: Actor, snap?: Snapshot): Promise<Memory[]> {
@@ -133,6 +131,21 @@ export async function visibleMemories(vault: Vault, actor: Actor, snap?: Snapsho
 
 async function visibleConstitution(vault: Vault, actor: Actor, snap?: Snapshot): Promise<ConstitutionDoc[]> {
   return (snap?.docs ?? (await vault.listConstitution())).filter((d) => canSee(actor, d.disclosure));
+}
+
+/**
+ * 語意索引的完整語料：全部憲法文件與 active 條目，與呼叫者權限無關（只在本機計算，不外露）。
+ * 所有使用 SemanticIndex 的地方都要用同一份語料，快取的清理才不會互相打架。
+ */
+export async function semanticCorpus(
+  vault: Vault,
+  snap?: Snapshot,
+): Promise<{ texts: string[]; memories: Memory[]; memoryTexts: string[] }> {
+  const now = vault.now();
+  const { memories: all, docs } = snap ?? (await snapshot(vault));
+  const memories = all.filter((m) => isActive(m.meta, now));
+  const memoryTexts = memories.map(memoryText);
+  return { texts: [...docs.map(docText), ...memoryTexts], memories, memoryTexts };
 }
 
 async function rank(vault: Vault, snap: Snapshot, items: Memory[], query: string): Promise<Memory[]> {
@@ -199,39 +212,54 @@ export async function getContext(
 export async function recall(
   vault: Vault,
   actor: Actor,
-  opts: { id?: string; query?: string; limit?: number },
+  opts: { id?: string; query?: string; limit?: number; tags?: string[] },
 ): Promise<string> {
+  const now = vault.now();
+  const snap = await snapshot(vault);
+  const pool = await visibleMemories(vault, actor, snap);
   if (opts.id) {
     const m = await vault.readMemory(opts.id);
     if (!m || !canSee(actor, m.meta.disclosure, m.meta.scope.agents)) return `找不到或無權存取：${opts.id}`;
-    return renderDetail(m, vault.now());
+    return renderDetail(m, now, pool);
   }
   const query = opts.query ?? "";
   const limit = opts.limit ?? 8;
-  // 憲法與知識放在同一個語料裡計分，IDF 與門檻才一致
-  const snap = await snapshot(vault);
-  const docs = await visibleConstitution(vault, actor, snap);
-  const mems = await visibleMemories(vault, actor, snap);
-  const scores = await relevance(vault, snap, [...docs, ...mems], query);
-  const cutoff = Math.max(0, ...scores) * MIN_RELATIVE_SCORE;
-  const keep = (r: number) => r > 0 && r >= cutoff;
-  const hitDocs = docs
-    .map((d, i) => ({ d, r: scores[i]! }))
-    .filter((x) => keep(x.r))
-    .sort((a, b) => b.r - a.r);
-  const hitMems = mems
-    .map((m, i) => ({ m, r: scores[docs.length + i]! }))
-    .filter((x) => keep(x.r))
-    .sort((a, b) => b.r - a.r || b.m.meta.confidence - a.m.meta.confidence)
-    .slice(0, limit);
-  if (!hitDocs.length && !hitMems.length) return `沒有符合「${query}」的知識。`;
+  const want = normalizeTags(opts.tags ?? []);
+  const label = [query, ...want.map((t) => `#${t}`)].filter(Boolean).join(" ");
+  // 標籤篩選只作用於知識條目；憲法文件沒有標籤
+  const docs = want.length ? [] : await visibleConstitution(vault, actor, snap);
+  const mems = want.length ? pool.filter((m) => want.every((t) => m.meta.tags.includes(t))) : pool;
+  let hitDocs: ConstitutionDoc[];
+  let hitMems: Memory[];
+  if (!query.trim()) {
+    hitDocs = [];
+    hitMems = [...mems].sort((a, b) => b.meta.confidence - a.meta.confidence).slice(0, limit);
+  } else {
+    // 憲法與知識放在同一個語料裡計分，IDF 與門檻才一致
+    const scores = await relevance(vault, snap, [...docs, ...mems], query);
+    const cutoff = Math.max(0, ...scores) * MIN_RELATIVE_SCORE;
+    const keep = (r: number) => r > 0 && r >= cutoff;
+    hitDocs = docs
+      .map((d, i) => ({ d, r: scores[i]! }))
+      .filter((x) => keep(x.r))
+      .sort((a, b) => b.r - a.r)
+      .map((x) => x.d);
+    hitMems = mems
+      .map((m, i) => ({ m, r: scores[docs.length + i]! }))
+      .filter((x) => keep(x.r))
+      .sort((a, b) => b.r - a.r || b.m.meta.confidence - a.m.meta.confidence)
+      .slice(0, limit)
+      .map((x) => x.m);
+  }
+  if (!hitDocs.length && !hitMems.length) return `沒有符合「${label}」的知識。`;
   const parts: string[] = [];
-  for (const { d } of hitDocs) parts.push(`## 憲法：${d.title}（${d.file}）\n${d.body}`);
-  for (const { m } of hitMems) parts.push(renderDetail(m, vault.now()));
+  for (const d of hitDocs) parts.push(`## 憲法：${d.title}（${d.file}）\n${d.body}`);
+  for (const m of hitMems) parts.push(renderDetail(m, now, pool));
   return parts.join("\n\n---\n\n");
 }
 
-function renderDetail(m: Memory, now: Date): string {
+/** pool：呼叫者看得到的 active 條目；關聯只從這裡取，看不到的連 id 都不會出現 */
+function renderDetail(m: Memory, now: Date, pool: Memory[]): string {
   const x = m.meta;
   const lines = [
     `## ${x.id}`,
@@ -240,12 +268,20 @@ function renderDetail(m: Memory, now: Date): string {
     `範圍：領域=${x.scope.domain ?? "（不限）"}；情境=${x.scope.contexts.join("、") || "（不限）"}；agent=${x.scope.agents.join("、")}`,
     `狀態：${isActive(x, now) ? "active" : x.status}　生效：${x.valid_from}${x.ttl ? `　TTL：${x.ttl}` : ""}`,
   ];
+  if (x.tags.length) lines.push(`標籤：${x.tags.map((t) => `#${t}`).join(" ")}`);
   if (x.supersedes.length) lines.push(`取代：${x.supersedes.join("、")}`);
   if (m.body) lines.push("", m.body);
   if (x.evidence.length) {
     lines.push("", "證據：");
     for (const e of x.evidence) {
       lines.push(`- ${e.at} ${e.source}${e.quote ? `：「${e.quote}」` : ""}`);
+    }
+  }
+  const rel = neighbors(m, pool);
+  if (rel.length) {
+    lines.push("", "關聯：");
+    for (const n of rel) {
+      lines.push(`${formatLine(n.memory.meta).replace(/^- /, `- 〔${n.label}〕`)}${n.note ? `（${n.note}）` : ""}`);
     }
   }
   return lines.join("\n");
@@ -264,6 +300,7 @@ export const SUBMIT_GUIDE = `## 何時提交記憶（propose_memory）
 - 使用者完整接受你的產出而未修改時（可用 record_example 保存範例）。
 - 你對使用者形成了新的觀察或推測時——在 rationale 寫下你的觀點與理由。
 務必附上使用者原話（evidence.quote），並誠實標示口吻：stated（他說的）／observed（你觀察到的）／inferred（你推測的）。
+發現兩條知識互相矛盾、一條源自另一條，或想補標籤時，用 propose_links 提出。recall 裡標示「⚠ 張力」的關聯代表兩條都成立、彼此拉扯，兩者都要考慮。
 你只能提案，不能直接改寫知識；Keeper 會審查。`;
 
 /** 連線時經 MCP instructions 注入的精簡核心摘要（僅限名片等級） */

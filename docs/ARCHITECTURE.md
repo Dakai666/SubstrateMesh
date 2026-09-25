@@ -75,6 +75,11 @@ valid_from: 2026-09-24
 valid_until: null            # 失效時間（人會改變，舊知識標記為過去而非刪除）
 ttl: null                    # 例如當前焦點可設 30d
 supersedes: []
+tags: [coding, review]       # 自由標籤，正規化為小寫
+links:                       # 與其他條目的關聯
+  - to: mem_01J7...
+    rel: derived_from        # derived_from | contradicts | refines | example_of | related
+    note: "源自那次 review 被退件"
 evidence:
   - proposal: prop_01J8...
     source: claude-code/session_xxx
@@ -177,8 +182,15 @@ resolution: null             # 合併後指向 mem_...；拒絕時寫理由
 | `recall(query)` | 查詢特定主題，附出處與信心度 |
 | `propose_memory(...)` | 提交記憶 PR |
 | `record_example(...)` | 記錄一份使用者接受的優秀產出 |
+| `propose_links(target, ...)` | 提出標籤或關聯調整（不改主張） |
+| `list_tags()` | 可見條目的標籤詞彙與次數 |
 
 `get_context` 只回傳**索引與摘要**；細節由 agent 自行以 `recall` 調閱，保持簡單。
+
+**標籤與關聯**（D27）：`recall` 可依 `tags` 篩選；命中的條目會附上一跳關聯的一行摘要，
+`contradicts` 標示為「⚠ 張力」並排在最前。`contradicts` 與 `related` 是雙向關係，只存一端、兩端都顯示。
+關聯同樣經過揭露權限過濾：看不到的條目不會經由關聯露出，連 id 都不會。
+agent 以 `propose_links`（`relink` 提案）調整標籤與關聯；Keeper 以 `suggest_links`、`list_tags` 整理。
 
 **檢索**：BM25 關鍵字（D25）為基礎；設定本地 embedding 端點後，與語意相似度混合（D26），
 補足跨語言（英文查詢、中文記憶）與換句話說。embedding 只在本機計算，連不上時自動退回純 BM25。
@@ -197,7 +209,7 @@ SUBSTRATE_EMBED_URL=http://127.0.0.1:11434 SUBSTRATE_EMBED_MODEL=qwen3-embedding
 
 ### Keeper 專用（一般 agent 不可見）
 
-`list_proposals`、`review`、`merge`、`reject`、`defer`、`escalate`、`consolidate`
+`list_proposals`、`review`、`merge`、`reject`、`defer`、`escalate`、`consolidate`、`suggest_links`
 
 ## 7. Keeper
 
