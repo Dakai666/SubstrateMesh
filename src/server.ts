@@ -82,10 +82,11 @@ export async function buildServer(vault: Vault, actor: Actor, session?: string):
     "recall",
     {
       title: "調閱使用者知識細節",
-      description: "以 id 取得單條知識的完整內容與證據原話，或以關鍵字查詢相關知識。",
+      description:
+        "以 id 取得單條知識的完整內容與證據原話，或以關鍵字查詢相關知識。知識多以繁體中文記錄；查詢時用中文關鍵字，可一次給多個同義詞（空白分隔）以提高命中率。",
       inputSchema: {
         id: z.string().optional().describe("mem_... 條目 id"),
-        query: z.string().optional().describe("查詢關鍵字"),
+        query: z.string().optional().describe("查詢關鍵字，例如「咖啡 飲料 早餐」"),
         limit: z.number().int().min(1).max(30).optional(),
       },
       annotations: { readOnlyHint: true },

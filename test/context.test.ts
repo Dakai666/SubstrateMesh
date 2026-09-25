@@ -1,7 +1,8 @@
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { buildInstructions, getContext, recall, tokenize } from "../src/context.js";
+import { buildInstructions, getContext, recall } from "../src/context.js";
+import { normalize, score, terms } from "../src/search.js";
 import { mergeProposal, submitProposal, type SubmitInput } from "../src/proposals.js";
 import type { Vault } from "../src/vault.js";
 import { claude, keeper, loom, quote, tempVault } from "./helpers.js";
@@ -18,11 +19,27 @@ async function seed(v: Vault, input: Partial<SubmitInput> & { claim: string }) {
   return (await mergeProposal(v, keeper, proposal)).memory;
 }
 
-describe("tokenize", () => {
-  it("拉丁字詞 + CJK 二字組", () => {
-    const t = tokenize("Code review 要先給結論");
+describe("search", () => {
+  it("拉丁字詞 + CJK 單字與二字組", () => {
+    const t = terms("Code review 要先給結論");
     expect(t.has("code")).toBe(true);
     expect(t.has("結論")).toBe(true);
+    expect(t.has("論")).toBe(true);
+    expect(t.has("要")).toBe(false); // 虛字不以單字計分
+  });
+
+  it("簡繁與全形正規化、英文詞形還原", () => {
+    expect(normalize("喜欢简洁")).toBe("喜歡簡潔");
+    expect(normalize("ＡＰＩ")).toBe("api");
+    expect(terms("tests").has("test")).toBe(true);
+    expect(terms("libraries").has("library")).toBe(true);
+  });
+
+  it("BM25：罕見詞權重高於常見詞", () => {
+    const docs = ["使用者喜歡咖啡", "使用者喜歡喝茶", "使用者喜歡散步"];
+    const s = score(docs, (d) => [[d, 1]], "喜歡咖啡");
+    expect(s[0]).toBeGreaterThan(s[1]!);
+    expect(s[1]).toBeCloseTo(s[2]!);
   });
 });
 
@@ -76,6 +93,38 @@ describe("recall", () => {
     const found = await recall(v, claude, { query: "結論" });
     expect(found).toContain(id);
     expect(found).not.toContain("文章語氣");
+  });
+
+  it("單字、簡體與證據原話都能命中", async () => {
+    const v = await tempVault();
+    const coffee = await seed(v, {
+      claim: "早上習慣喝黑咖啡，不加糖",
+      evidence: [{ source: "chat", quote: "我不吃早餐，一杯美式就好", at: "2026-01-01T00:00:00Z" }],
+    });
+    await seed(v, { claim: "文章語氣要直接" });
+    expect(await recall(v, claude, { query: "糖" })).toContain(coffee);
+    expect(await recall(v, claude, { query: "习惯喝什么" })).toContain(coffee);
+    const byQuote = await recall(v, claude, { query: "早餐" });
+    expect(byQuote).toContain(coffee);
+    expect(byQuote).not.toContain("文章語氣");
+  });
+
+  it("以中文類型名稱查詢", async () => {
+    const v = await tempVault();
+    const id = await seed(v, { claim: "重構前先寫測試", kind: "lesson" });
+    await seed(v, { claim: "偏好深色主題" });
+    const found = await recall(v, claude, { query: "教訓" });
+    expect(found).toContain(id);
+    expect(found).not.toContain("深色主題");
+  });
+
+  it("低分雜訊不回傳", async () => {
+    const v = await tempVault();
+    const id = await seed(v, { claim: "code review 先給結論，再列細節" });
+    await seed(v, { claim: "論文要附上引用來源" });
+    const found = await recall(v, claude, { query: "review 結論" });
+    expect(found).toContain(id);
+    expect(found).not.toContain("論文");
   });
 
   it("無權存取時不洩漏內容", async () => {
