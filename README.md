@@ -55,14 +55,43 @@ claude mcp add --transport http substrate http://127.0.0.1:7077/mcp \
 - 可選的 `X-Substrate-Session` header 會記錄在提案證據中，方便追溯。
 - stdio 模式下若多個 agent 各自啟動行程寫入同一個 vault，git 可能短暫鎖定（已有重試）；多 agent 請用 daemon。
 
+### 語意檢索（選用）
+
+預設以 BM25 關鍵字檢索。若本機有 embedding 模型（例如 Ollama），設定環境變數即可混合語意相似度，
+補足跨語言（英文查詢、中文記憶）與換句話說：
+
+```bash
+ollama pull qwen3-embedding:0.6b
+SUBSTRATE_EMBED_URL=http://127.0.0.1:11434 \
+SUBSTRATE_EMBED_MODEL=qwen3-embedding:0.6b \
+  substrate serve --http
+```
+
+- embedding 只在本機計算；向量快取在 vault 的 `.index/`（不進 git、不經 MCP 對外）。
+- 連不上模型時自動退回純 BM25，不會讓查詢失敗。
+- 以 launchd 常駐時，把變數加進 plist 的 `EnvironmentVariables`，再以 `launchctl bootout` + `bootstrap`
+  重新載入（`kickstart -k` 不會重讀 plist）。
+- 可調參數與校準方式見 [D26](docs/DECISIONS.md)；換模型需要重新校準 `SUBSTRATE_EMBED_MIN_COSINE`。
+
 ### 審查記憶 PR
 
 ```bash
 substrate proposals                        # 待審清單（--status escalated|deferred|all）
 substrate proposals show <id>
-substrate proposals merge <id> --note "理由" [--layer constitution]
+substrate proposals merge <id> [<id> ...] --note "理由" [--layer constitution]
 substrate proposals reject <id> --note "理由"
 substrate views                            # 重建 views/ 下給人閱讀的主題視圖
+```
+
+### 標籤與關聯
+
+知識條目可以帶 `tags` 與 `links`（`derived_from` 源自、`contradicts` 張力、`refines` 細化、
+`example_of` 範例、`related` 相關）。`recall` 命中時會附上一跳關聯，張力排在最前；
+看不到的條目不會經由關聯露出。agent 以 `propose_links` 提出調整，同樣經 Keeper 審查。
+
+```bash
+substrate links suggest                    # 相似但尚未建立關聯的條目對（候選，需判斷）
+substrate tags                             # 標籤詞彙表與可能的同義標籤
 ```
 
 ### 從其他 AI 收集畫像
@@ -73,10 +102,12 @@ substrate views                            # 重建 views/ 下給人閱讀的主
 substrate import replies/chatgpt.md --source chatgpt
 ```
 
-### Keeper（排程的 headless Claude Code）
+### Keeper
 
-Keeper 的角色規格在 vault 的 `.keeper/KEEPER.md`，審查準則在 `.keeper/policy.yaml`。
-以 keeper token 設定一份 MCP 設定檔後，由排程（例如 launchd／cron）定期執行：
+Keeper 的角色規格在 vault 的 `.keeper/KEEPER.md`，審查準則在 `.keeper/policy.yaml`
+（正本是本 repo 的 `templates/`，更新後需同步到 vault，見 [AGENTS.md](AGENTS.md)）。
+
+可以在本 repo 資料夾以 keeper token 連線的 Claude Code 隨需擔任，也可以由排程（例如 launchd／cron）定期執行：
 
 ```bash
 claude -p "你是 SubstrateMesh 的 Keeper。先閱讀 ~/substrate-vault/.keeper/KEEPER.md 與 policy.yaml，然後執行一次審查流程，最後整理需要使用者判斷的事項。" \
@@ -88,12 +119,15 @@ claude -p "你是 SubstrateMesh 的 Keeper。先閱讀 ~/substrate-vault/.keeper
 | 工具 | 誰可用 | 用途 |
 |---|---|---|
 | `get_context` | 全部 | 依任務回傳關於使用者的精簡索引（憲法層優先） |
-| `recall` | 全部 | 以 id 或關鍵字調閱細節與證據原話 |
-| `propose_memory` | 全部 | 提交記憶 PR |
+| `recall` | 全部 | 以 id、關鍵字或標籤調閱細節與證據原話，附一跳關聯 |
+| `propose_memory` | 全部 | 提交記憶 PR（可帶標籤與關聯） |
+| `propose_links` | 全部 | 只調整既有知識的標籤或關聯 |
+| `list_tags` | 全部 | 可見知識的標籤詞彙與次數 |
 | `record_example` | 全部 | 保存使用者完整接受的優秀產出 |
 | `list_proposals`／`show_proposal` | Keeper | 檢視提案 |
 | `merge_proposal`／`reject_proposal`／`defer_proposal`／`escalate_proposal` | Keeper | 裁決 |
 | `comment_proposal`／`expire_memories` | Keeper | 討論與代謝 |
+| `suggest_links` | Keeper | 相似但尚未建立關聯的條目對 |
 
 連線時，server 會透過 MCP `instructions` 動態注入「畫像使用守則」、「何時提交記憶」與名片等級的核心摘要。
 
@@ -103,3 +137,5 @@ claude -p "你是 SubstrateMesh 的 Keeper。先閱讀 ~/substrate-vault/.keeper
 npm run typecheck
 npm test
 ```
+
+協作規約（含 `dist/` 與常駐 daemon 的部署陷阱）見 [AGENTS.md](AGENTS.md)。
