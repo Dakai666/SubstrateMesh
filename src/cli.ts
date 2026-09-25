@@ -30,7 +30,7 @@ const HELP = `substrate ${VERSION} — 個人上下文基質
                                                  常駐 daemon，多 agent 以 bearer token 連線
   substrate token add <agent> [--role agent|keeper] [--clearance profile]
   substrate token list | revoke <agent>
-  substrate keeper grant [--ttl 1h]              開一段審查時段授權（上限 8h）：時段內 Keeper 經你在對話中
+  substrate keeper grant [--ttl 1h]              開一段審查時段授權（上限 1h）：時段內 Keeper 經你在對話中
                                                  同意後，可以合併它自己提交的提案；憲法層仍只能由你合併
   substrate keeper [grants] | revoke             列出有效授權／提早收回全部授權
   substrate proposals [list] [--status pending]  使用者審查記憶 PR

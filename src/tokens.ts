@@ -75,7 +75,7 @@ export async function revokeToken(file: string, agent: string): Promise<number> 
 }
 
 /** 授權時段上限：這是「使用者正在場」的窗口，不是長期權限 */
-export const GRANT_MAX_MINUTES = 8 * 60;
+export const GRANT_MAX_MINUTES = 60;
 
 /** 解析 "30m"、"1h"；超出上限或格式錯誤時丟出例外 */
 export function parseGrantTtl(ttl: string): number {
@@ -83,7 +83,7 @@ export function parseGrantTtl(ttl: string): number {
   if (!m) throw new Error(`--ttl 格式應為 30m 或 1h：${ttl}`);
   const minutes = Number(m[1]) * (m[2] === "h" ? 60 : 1);
   if (minutes < 1 || minutes > GRANT_MAX_MINUTES) {
-    throw new Error(`--ttl 必須介於 1m 與 ${GRANT_MAX_MINUTES / 60}h 之間`);
+    throw new Error(`--ttl 必須介於 1m 與 ${GRANT_MAX_MINUTES}m 之間`);
   }
   return minutes;
 }

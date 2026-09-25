@@ -162,8 +162,9 @@ describe("審查時段授權", () => {
     expect(data.grants?.[0]?.sha256).not.toContain(token);
 
     expect(parseGrantTtl("45m")).toBe(45);
-    expect(parseGrantTtl("2h")).toBe(120);
-    expect(() => parseGrantTtl("9h")).toThrow();
+    expect(parseGrantTtl("1h")).toBe(60);
+    expect(() => parseGrantTtl("61m")).toThrow();
+    expect(() => parseGrantTtl("2h")).toThrow();
     expect(() => parseGrantTtl("1d")).toThrow();
   });
 });
