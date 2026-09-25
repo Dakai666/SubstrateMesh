@@ -37,8 +37,9 @@ async function writeViews(vault: Vault): Promise<string[]> {
       for (const m of list.sort((a, b) => b.meta.confidence - a.meta.confidence)) {
         const ctx = m.meta.scope.contexts.length ? `（情境：${m.meta.scope.contexts.join("、")}）` : "";
         const who = m.meta.scope.agents.includes("*") ? "" : `〔僅 ${m.meta.scope.agents.join("、")}〕`;
+        const tags = m.meta.tags.length ? ` ${m.meta.tags.map((t) => `#${t}`).join(" ")}` : "";
         parts.push(
-          `- ${m.meta.claim}${ctx}${who} — ${VOICE[m.meta.voice]}·${m.meta.confidence}·${m.meta.disclosure} \`${m.meta.id}\``,
+          `- ${m.meta.claim}${ctx}${who}${tags} — ${VOICE[m.meta.voice]}·${m.meta.confidence}·${m.meta.disclosure} \`${m.meta.id}\``,
         );
       }
       parts.push("");

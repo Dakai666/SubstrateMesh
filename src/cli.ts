@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { readFile } from "node:fs/promises";
+import { linkChangeSection, linkSuggestionReport, tagReport } from "./curate.js";
 import { semanticFromEnv } from "./embed.js";
 import { startHttp } from "./http.js";
 import { importQuestionnaire } from "./importer.js";
@@ -31,10 +32,13 @@ const HELP = `substrate ${VERSION} — 個人上下文基質
   substrate token list | revoke <agent>
   substrate proposals [list] [--status pending]  使用者審查記憶 PR
   substrate proposals show <id>
-  substrate proposals merge <id> [--note ..] [--layer ..]
+  substrate proposals merge <id> [<id> ...] [--note ..] [--layer ..]
   substrate proposals reject|defer <id> --note <理由>
   substrate proposals comment <id> --note <內容>
   substrate import <回覆檔> --source <AI 名稱>     匯入問卷回覆，轉為記憶 PR
+  substrate links suggest [--min 0.72] [--limit 20]
+                                                 列出相似但尚未建立關聯的條目（Keeper 整理用）
+  substrate tags                                 標籤詞彙表與可能的同義標籤
   substrate expire                               封存到期知識
   substrate views                                重建 views/ 主題視圖
 
@@ -94,11 +98,18 @@ function oneOf<T extends string>(v: string | undefined, allowed: readonly T[], f
   return v as T;
 }
 
+/** 依環境變數啟用語意檢索；未設定則維持純 BM25 */
+function withSemantic(vault: Vault): Vault {
+  const semantic = semanticFromEnv(process.env);
+  if (semantic) vault.enableSemantic(semantic.embedder, semantic.options);
+  return vault;
+}
+
 const USER: Actor = { name: process.env.USER ?? "user", role: "user", clearance: "private" };
 
 async function main() {
   const a = parseArgs(process.argv.slice(2));
-  const [cmd, sub, arg] = a._;
+  const [cmd, sub, arg, ...rest] = a._;
 
   switch (cmd) {
     case "init": {
@@ -108,11 +119,10 @@ async function main() {
       return;
     }
     case "serve": {
-      const vault = await Vault.open(vaultPath(a));
-      const semantic = semanticFromEnv(process.env);
-      if (semantic) {
-        vault.enableSemantic(semantic.embedder, semantic.options);
-        console.error(`語意檢索：${semantic.embedder.model}（alpha=${semantic.options.alpha}，cosine 下限=${semantic.options.minCosine}）`);
+      const vault = withSemantic(await Vault.open(vaultPath(a)));
+      if (vault.semantic) {
+        const { embedder, options } = vault.semantic;
+        console.error(`語意檢索：${embedder.model}（alpha=${options.alpha}，cosine 下限=${options.minCosine}）`);
       }
       if (a.flags.http) {
         const host = str(a.flags.host) ?? "127.0.0.1";
@@ -173,7 +183,8 @@ async function main() {
           if (!ps.length) console.log(`沒有 ${status} 的提案。`);
           for (const p of ps) {
             const m = p.meta;
-            console.log(`${m.id}  ${m.status}  ${m.suggested_layer}/${m.kind}/${m.voice}  ${m.proposer}\n    ${m.claim}`);
+            const act = m.action === "create" ? "" : `  ${m.action}→${m.target}`;
+            console.log(`${m.id}  ${m.status}  ${m.suggested_layer}/${m.kind}/${m.voice}  ${m.proposer}${act}\n    ${m.claim}`);
           }
           return;
         }
@@ -181,6 +192,8 @@ async function main() {
           const p = await vault.readProposal(arg ?? "");
           if (!p) throw new Error(`找不到提案：${arg}`);
           console.log(JSON.stringify(p.meta, null, 2));
+          const changes = await linkChangeSection(vault, p);
+          if (changes) console.log(`\n${changes}`);
           if (p.body) console.log(`\n${p.body}`);
           for (const e of p.thread) console.log(`\n[${e.at}] ${e.author}(${e.role})\n${e.text}`);
           return;
@@ -188,8 +201,12 @@ async function main() {
         case "merge": {
           const layer = str(a.flags.layer) as Layer | undefined;
           if (layer && !LAYERS.includes(layer)) throw new Error(`--layer 必須是 ${LAYERS.join("|")}`);
-          const r = await mergeProposal(vault, USER, arg ?? "", note, layer ? { layer } : {});
-          console.log(`已合併 → ${r.memory}`);
+          const ids = [arg ?? "", ...rest];
+          for (const id of ids) {
+            const r = await mergeProposal(vault, USER, id, note, layer ? { layer } : {});
+            console.log(`已合併 ${id} → ${r.memory}`);
+            for (const w of r.warnings) console.log(`  注意：${w}`);
+          }
           return;
         }
         case "reject":
@@ -214,6 +231,23 @@ async function main() {
       const r = await importQuestionnaire(vault, source, await readFile(sub, "utf8"));
       console.log(`原始回覆：${r.raw}\n已建立 ${r.proposals.length} 筆提案。`);
       for (const s of r.skipped) console.log(`略過第 ${s.index + 1} 項：${s.reason}`);
+      return;
+    }
+    case "links": {
+      if (sub !== "suggest") throw new Error("用法：substrate links suggest [--min 0.72] [--limit 20]");
+      const vault = withSemantic(await Vault.open(vaultPath(a)));
+      const min = str(a.flags.min);
+      const limit = str(a.flags.limit);
+      console.log(
+        await linkSuggestionReport(vault, {
+          minSimilarity: min === undefined ? undefined : Number(min),
+          limit: limit === undefined ? undefined : Number(limit),
+        }),
+      );
+      return;
+    }
+    case "tags": {
+      console.log(await tagReport(withSemantic(await Vault.open(vaultPath(a))), USER, true));
       return;
     }
     case "expire": {

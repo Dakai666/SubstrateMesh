@@ -145,11 +145,27 @@ export class SemanticIndex {
    * corpus 必須是完整語料（與呼叫者權限無關），快取才能安全地清掉已消失的條目。
    */
   async similarities(corpus: string[], query: string): Promise<number[] | null> {
-    if (Date.now() < this.downUntil) return null;
-    try {
+    return this.guard(async () => {
       const [docs, q] = await Promise.all([this.documents(corpus), this.embedder.embed([query], "query")]);
       const qv = Float32Array.from(q[0]!);
       return docs.map((d) => cosine(qv, d));
+    });
+  }
+
+  /** 語料的文件向量（同樣走快取；corpus 的要求同 similarities） */
+  vectors(corpus: string[]): Promise<Float32Array[] | null> {
+    return this.guard(() => this.documents(corpus));
+  }
+
+  /** 不進快取的一次性向量，例如標籤 */
+  adhoc(texts: string[]): Promise<Float32Array[] | null> {
+    return this.guard(async () => (await this.embedder.embed(texts, "document")).map((v) => Float32Array.from(v)));
+  }
+
+  private async guard<T>(fn: () => Promise<T>): Promise<T | null> {
+    if (Date.now() < this.downUntil) return null;
+    try {
+      return await fn();
     } catch (err) {
       this.downUntil = Date.now() + RETRY_AFTER_MS;
       console.error(`語意檢索暫停 ${RETRY_AFTER_MS / 1000} 秒，改用純 BM25：${(err as Error).message}`);

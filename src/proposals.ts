@@ -5,14 +5,19 @@ import {
   type Evidence,
   type Kind,
   type Layer,
+  type Link,
+  type LinkRef,
   type Memory,
   type Proposal,
   type ProposalMeta,
   type Scope,
   type ThreadEntry,
   type Voice,
+  normalizeTags,
+  SYMMETRIC_RELS,
 } from "./types.js";
-import { isExpired } from "./context.js";
+import { canSee, isExpired } from "./context.js";
+import { applyLinkChanges } from "./links.js";
 
 export class PolicyError extends Error {}
 
@@ -21,7 +26,7 @@ export interface SubmitInput {
   kind: Kind;
   voice: Voice;
   suggested_layer: Layer;
-  action?: "create" | "update" | "supersede" | "archive";
+  action?: "create" | "update" | "supersede" | "archive" | "relink";
   target?: string | null;
   scope?: Partial<Scope>;
   disclosure?: Disclosure;
@@ -31,6 +36,10 @@ export interface SubmitInput {
   rationale?: string;
   body?: string;
   session?: string;
+  tags?: string[];
+  links?: Link[];
+  remove_tags?: string[];
+  remove_links?: LinkRef[];
 }
 
 export interface SubmitResult {
@@ -59,10 +68,34 @@ export async function submitProposal(
   const notes: string[] = [];
   const thread: ThreadEntry[] = [];
 
+  // agent 看不到的條目一律回報「找不到或無權存取」，不讓錯誤訊息成為探測存在與否的管道
+  const visible = async (id: string) => {
+    const mem = await vault.readMemory(id);
+    return mem && canSee(actor, mem.meta.disclosure, mem.meta.scope.agents) ? mem : null;
+  };
   if (action !== "create") {
     if (!target) throw new PolicyError(`action=${action} 需要指定 target（mem_...）。`);
-    const mem = await vault.readMemory(target);
-    if (!mem) throw new PolicyError(`找不到 target：${target}`);
+    if (!(await visible(target))) throw new PolicyError(`找不到或無權存取 target：${target}`);
+  }
+  const links = input.links ?? [];
+  for (const l of links) {
+    if (l.to === target) throw new PolicyError("條目不能關聯到自己。");
+    if (!(await visible(l.to))) throw new PolicyError(`找不到或無權存取關聯目標：${l.to}`);
+  }
+  const changes = {
+    tags: normalizeTags(input.tags ?? []),
+    links,
+    remove_tags: normalizeTags(input.remove_tags ?? []),
+    remove_links: input.remove_links ?? [],
+  };
+  if (
+    action === "relink" &&
+    !changes.tags.length &&
+    !changes.links.length &&
+    !changes.remove_tags.length &&
+    !changes.remove_links.length
+  ) {
+    throw new PolicyError("relink 需要至少一項標籤或關聯的變更。");
   }
 
   const evidence: Evidence[] = (input.evidence ?? []).map((e) => ({
@@ -70,7 +103,7 @@ export async function submitProposal(
     quote: e.quote,
     at: e.at ?? now,
   }));
-  if (evidence.length === 0 || evidence.every((e) => !e.quote)) {
+  if (action !== "relink" && (evidence.length === 0 || evidence.every((e) => !e.quote))) {
     notes.push("此提案沒有附上使用者原話，Keeper 審查時會降低權重。");
   }
 
@@ -88,6 +121,10 @@ export async function submitProposal(
   if (open) {
     return vault.write(`proposal: corroborate ${open.meta.id} by ${actor.name}`, async () => {
       open.meta.evidence.push(...evidence);
+      open.meta.tags = normalizeTags([...open.meta.tags, ...changes.tags]);
+      open.meta.links = [...open.meta.links, ...links.filter((l) => !open.meta.links.some((x) => x.to === l.to && x.rel === l.rel))];
+      open.meta.remove_tags = normalizeTags([...open.meta.remove_tags, ...changes.remove_tags]);
+      open.meta.remove_links = [...open.meta.remove_links, ...changes.remove_links];
       open.thread.push({
         at: now,
         author: actor.name,
@@ -156,6 +193,7 @@ export async function submitProposal(
     confidence: input.confidence,
     ttl: input.ttl ?? null,
     evidence,
+    ...changes,
     rationale: input.rationale ?? "",
     resolution: null,
   };
@@ -174,6 +212,35 @@ export async function submitProposal(
   });
 }
 
+export interface RelinkInput {
+  target: string;
+  tags?: string[];
+  links?: Link[];
+  remove_tags?: string[];
+  remove_links?: LinkRef[];
+  rationale?: string;
+  session?: string;
+}
+
+/** 只調整標籤或關聯的提案；主張、層級等沿用 target */
+export async function submitRelink(vault: Vault, actor: Actor, input: RelinkInput): Promise<SubmitResult> {
+  const t = await vault.readMemory(input.target);
+  if (!t || !canSee(actor, t.meta.disclosure, t.meta.scope.agents)) {
+    throw new PolicyError(`找不到或無權存取 target：${input.target}`);
+  }
+  return submitProposal(vault, actor, {
+    ...input,
+    action: "relink",
+    claim: `關聯調整：${t.meta.claim}`,
+    kind: t.meta.kind,
+    voice: t.meta.voice,
+    suggested_layer: t.meta.layer,
+    confidence: t.meta.confidence,
+    scope: t.meta.scope,
+    disclosure: t.meta.disclosure,
+  });
+}
+
 // ---------------- 審查 ----------------
 
 export interface MergeOverrides {
@@ -184,6 +251,8 @@ export interface MergeOverrides {
   scope?: Partial<Scope>;
   disclosure?: Disclosure;
   ttl?: string | null;
+  /** 取代提案的標籤（Keeper 整理詞彙用） */
+  tags?: string[];
 }
 
 const REVIEWABLE = ["pending", "deferred", "escalated"];
@@ -204,7 +273,7 @@ export async function mergeProposal(
   id: string,
   note?: string,
   overrides: MergeOverrides = {},
-): Promise<{ memory: string }> {
+): Promise<{ memory: string; warnings: string[] }> {
   const p = await loadReviewable(vault, actor, id);
   const m = p.meta;
 
@@ -229,6 +298,13 @@ export async function mergeProposal(
     agents: overrides.scope?.agents ?? m.scope.agents,
   };
   const paths: string[] = [];
+  const changes = {
+    tags: overrides.tags ? normalizeTags(overrides.tags) : m.tags,
+    links: [...m.links],
+    remove_tags: m.remove_tags,
+    remove_links: m.remove_links,
+  };
+  const { warnings, others } = await checkLinks(vault, m.target, changes.links, changes.remove_links);
 
   return vault.write(`proposal: merge ${m.id} by ${actor.name}`, async () => {
     let memoryId: string;
@@ -247,6 +323,8 @@ export async function mergeProposal(
         valid_until: null,
         ttl: overrides.ttl !== undefined ? overrides.ttl : m.ttl,
         supersedes,
+        tags: changes.tags,
+        links: changes.links,
         evidence,
         created_at: now,
         updated_at: now,
@@ -272,6 +350,13 @@ export async function mergeProposal(
       if (m.voice === "stated") t.meta.voice = "stated";
       t.meta.updated_at = now;
       if (p.body) t.body = p.body;
+      applyLinkChanges(t.meta, changes);
+      paths.push(await vault.saveMemory(t));
+      memoryId = t.meta.id;
+    } else if (m.action === "relink") {
+      const t = target!;
+      applyLinkChanges(t.meta, changes);
+      t.meta.updated_at = now;
       paths.push(await vault.saveMemory(t));
       memoryId = t.meta.id;
     } else if (m.action === "supersede") {
@@ -280,7 +365,11 @@ export async function mergeProposal(
       t.meta.valid_until = now;
       t.meta.updated_at = now;
       paths.push(await vault.saveMemory(t));
+      // 新版本承接舊版的標籤與關聯，再套用本次變更
       const mem = fresh([t.meta.id]);
+      mem.meta.tags = t.meta.tags;
+      mem.meta.links = t.meta.links;
+      applyLinkChanges(mem.meta, changes);
       paths.push(await vault.saveMemory(mem));
       memoryId = mem.meta.id;
     } else {
@@ -293,6 +382,18 @@ export async function mergeProposal(
       memoryId = t.meta.id;
     }
 
+    // 雙向關係只存一端：要移除的若存在另一端，從另一端移除
+    for (const o of others) {
+      const before = o.meta.links.length;
+      o.meta.links = o.meta.links.filter(
+        (l) => !(l.to === m.target && changes.remove_links.some((r) => r.to === o.meta.id && r.rel === l.rel)),
+      );
+      if (o.meta.links.length !== before) {
+        o.meta.updated_at = now;
+        paths.push(await vault.saveMemory(o));
+      }
+    }
+
     m.status = "merged";
     m.resolution = { by: actor.name, role: actor.role, at: now, note, memory: memoryId };
     if (note) p.thread.push({ at: now, author: actor.name, role: actor.role, text: `合併：${note}` });
@@ -300,8 +401,38 @@ export async function mergeProposal(
     paths.push(
       await vault.appendEvent({ type: "proposal.merged", actor: actor.name, proposal: m.id, memory: memoryId }),
     );
-    return { result: { memory: memoryId }, paths };
+    return { result: { memory: memoryId, warnings }, paths };
   });
+}
+
+/**
+ * 合併前驗證關聯：目標必須存在（否則拒絕），指向非 active 條目時警告；
+ * 雙向關係若另一端已存了同一條，略過以免重複。回傳需要一併修改的另一端條目。
+ */
+async function checkLinks(
+  vault: Vault,
+  target: string | null,
+  links: Link[],
+  removals: LinkRef[],
+): Promise<{ warnings: string[]; others: Memory[] }> {
+  const warnings: string[] = [];
+  const others: Memory[] = [];
+  for (let i = links.length - 1; i >= 0; i--) {
+    const l = links[i]!;
+    const to = await vault.readMemory(l.to);
+    if (!to) throw new PolicyError(`關聯目標不存在：${l.to}`);
+    if (to.meta.status !== "active") warnings.push(`關聯目標 ${l.to} 已是 ${to.meta.status}。`);
+    if (target && SYMMETRIC_RELS.has(l.rel) && to.meta.links.some((x) => x.to === target && x.rel === l.rel)) {
+      warnings.push(`${l.to} 已記錄與此條的 ${l.rel}，略過重複。`);
+      links.splice(i, 1);
+    }
+  }
+  for (const r of removals) {
+    if (!target || !SYMMETRIC_RELS.has(r.rel)) continue;
+    const o = await vault.readMemory(r.to);
+    if (o?.meta.links.some((x) => x.to === target && x.rel === r.rel)) others.push(o);
+  }
+  return { warnings, others };
 }
 
 type Transition = "rejected" | "deferred" | "escalated";
