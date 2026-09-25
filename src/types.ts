@@ -108,6 +108,8 @@ export const ResolutionSchema = z.object({
   at: z.string(),
   note: z.string().optional(),
   memory: z.string().optional(),
+  /** Keeper 憑使用者的審查時段授權合併自己的提案時，記下授權 id */
+  grant: z.string().optional(),
 });
 
 export const ProposalSchema = z.object({

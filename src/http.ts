@@ -68,7 +68,9 @@ export function startHttp(vault: Vault, opts: HttpOptions): Promise<Server> {
           })
           .catch(() => undefined);
       }
-      const mcp = await buildServer(vault, actor, typeof session === "string" ? session : undefined);
+      const mcp = await buildServer(vault, actor, typeof session === "string" ? session : undefined, {
+        tokensFile: opts.tokensFile,
+      });
       const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
       res.on("close", () => {
         void transport.close();

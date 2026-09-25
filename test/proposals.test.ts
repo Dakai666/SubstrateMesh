@@ -106,6 +106,33 @@ describe("審查與合併", () => {
     await expect(mergeProposal(v, user, proposal)).resolves.toBeTruthy();
   });
 
+  it("審查時段授權：Keeper 可合併自己的提案，並留下授權紀錄", async () => {
+    const v = await tempVault();
+    const { proposal } = await submitProposal(v, keeper, pref);
+    await mergeProposal(v, keeper, proposal, "使用者已同意", {}, { id: "grant_abc" });
+    const p = await v.readProposal(proposal);
+    expect(p?.meta.status).toBe("merged");
+    expect(p?.meta.resolution?.grant).toBe("grant_abc");
+    expect(p?.thread.at(-1)?.text).toContain("grant_abc");
+  });
+
+  it("授權只記在自己的提案上；不放寬憲法層", async () => {
+    const v = await tempVault();
+    const { proposal: others } = await submitProposal(v, claude, pref);
+    await mergeProposal(v, keeper, others, undefined, {}, { id: "grant_abc" });
+    expect((await v.readProposal(others))?.meta.resolution?.grant).toBeUndefined();
+
+    const { proposal: constitution } = await submitProposal(v, keeper, {
+      ...pref,
+      claim: "出錯時要減速、重新對齊，而不是加速補救",
+      kind: "principle",
+      suggested_layer: "constitution",
+    });
+    await expect(mergeProposal(v, keeper, constitution, undefined, {}, { id: "grant_abc" })).rejects.toThrow(
+      /憲法層/,
+    );
+  });
+
   it("觸及憲法層只能由使用者合併", async () => {
     const v = await tempVault();
     const { proposal } = await submitProposal(v, claude, {

@@ -8,13 +8,13 @@ import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { afterEach, describe, expect, it } from "vitest";
 import { startHttp } from "../src/http.js";
 import { buildServer } from "../src/server.js";
-import { addToken } from "../src/tokens.js";
+import { addGrant, addToken, loadTokens, parseGrantTtl, revokeGrants, verifyGrant } from "../src/tokens.js";
 import type { Actor } from "../src/types.js";
 import type { Vault } from "../src/vault.js";
 import { claude, keeper, tempVault } from "./helpers.js";
 
-async function connect(v: Vault, actor: Actor) {
-  const server = await buildServer(v, actor, "sess-1");
+async function connect(v: Vault, actor: Actor, tokensFile?: string) {
+  const server = await buildServer(v, actor, "sess-1", { tokensFile });
   const [a, b] = InMemoryTransport.createLinkedPair();
   await server.connect(a);
   const client = new Client({ name: "test", version: "0" });
@@ -100,6 +100,44 @@ describe("MCP server", () => {
     expect(textOf(await k.callTool({ name: "suggest_links", arguments: {} }))).toMatch(/候選關聯|沒有找到/);
   });
 
+  it("審查時段授權：有效 grant 才能讓 Keeper 合併自己的提案", async () => {
+    const v = await tempVault();
+    const dir = await mkdtemp(path.join(os.tmpdir(), "substrate-tokens-"));
+    const tokensFile = path.join(dir, "tokens.json");
+    const k = await connect(v, keeper, tokensFile);
+    const submit = async (claim: string) => {
+      const out = textOf(
+        await k.callTool({
+          name: "propose_memory",
+          arguments: { claim, kind: "preference", voice: "stated", suggested_layer: "preference", confidence: 0.8 },
+        }),
+      );
+      return /prop_[0-9A-Z]{26}/.exec(out)![0];
+    };
+    const merge = (id: string, grant?: string) => k.callTool({ name: "merge_proposal", arguments: { id, grant } });
+
+    const own = await submit("回覆一律使用繁體中文");
+    expect(textOf(await merge(own))).toContain("職責分離");
+    const bogus = await merge(own, "sg_not-a-real-grant");
+    expect(bogus.isError).toBe(true);
+    expect(textOf(bogus)).toContain("無效或已過期");
+
+    const { token, grant } = await addGrant(tokensFile, 60);
+    expect(textOf(await merge(own, token))).toContain("已合併");
+    expect((await v.readProposal(own))?.meta.resolution?.grant).toBe(grant.id);
+
+    expect(await revokeGrants(tokensFile)).toBe(1);
+    const second = await submit("先給結論再展開細節");
+    expect(textOf(await merge(second, token))).toContain("無效或已過期");
+  });
+
+  it("沒有 token 檔的 server 不接受 grant", async () => {
+    const v = await tempVault();
+    const k = await connect(v, keeper);
+    const r = await k.callTool({ name: "merge_proposal", arguments: { id: "prop_x", grant: "sg_x" } });
+    expect(textOf(r)).toContain("無法驗證");
+  });
+
   it("政策違規以 isError 回報，而不是丟例外", async () => {
     const v = await tempVault();
     const agent = await connect(v, claude);
@@ -109,6 +147,25 @@ describe("MCP server", () => {
     });
     expect(r.isError).toBe(true);
     expect(textOf(r)).toContain("推測");
+  });
+});
+
+describe("審查時段授權", () => {
+  it("到期後失效；時段長度有上限", async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), "substrate-tokens-"));
+    const tokensFile = path.join(dir, "tokens.json");
+    const now = new Date("2026-09-25T10:00:00Z");
+    const { token } = await addGrant(tokensFile, 30, now);
+    const data = await loadTokens(tokensFile);
+    expect(verifyGrant(data, token, new Date("2026-09-25T10:29:00Z"))).not.toBeNull();
+    expect(verifyGrant(data, token, new Date("2026-09-25T10:30:00Z"))).toBeNull();
+    expect(data.grants?.[0]?.sha256).not.toContain(token);
+
+    expect(parseGrantTtl("45m")).toBe(45);
+    expect(parseGrantTtl("1h")).toBe(60);
+    expect(() => parseGrantTtl("61m")).toThrow();
+    expect(() => parseGrantTtl("2h")).toThrow();
+    expect(() => parseGrantTtl("1d")).toThrow();
   });
 });
 
