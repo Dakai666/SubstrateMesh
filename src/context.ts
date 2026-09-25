@@ -1,4 +1,5 @@
 import type { ConstitutionDoc, Vault } from "./vault.js";
+import { MIN_RELATIVE_SCORE, score, type Fields } from "./search.js";
 import { DISCLOSURE_RANK, type Actor, type Layer, type Memory, type MemoryMeta } from "./types.js";
 
 const LAYER_RANK: Record<Layer, number> = { constitution: 0, preference: 1, experience: 2 };
@@ -29,29 +30,34 @@ export function estimateTokens(s: string): number {
   return cjk + Math.ceil((s.length - cjk) / 4);
 }
 
-/** 拉丁字詞 + CJK 二字組，足以應付個人規模的關鍵字比對 */
-export function tokenize(s: string): Set<string> {
-  const out = new Set<string>();
-  const lower = s.toLowerCase();
-  for (const w of lower.match(/[a-z0-9_\-]{2,}/g) ?? []) out.add(w);
-  for (const run of lower.match(/[㐀-鿿豈-﫿]+/g) ?? []) {
-    if (run.length === 1) out.add(run);
-    for (let i = 0; i < run.length - 1; i++) out.add(run.slice(i, i + 2));
-  }
-  return out;
+const KIND_LABEL: Record<Memory["meta"]["kind"], string> = {
+  preference: "偏好",
+  fact: "事實",
+  principle: "原則",
+  lesson: "教訓",
+  example: "範例",
+  focus: "焦點 關注",
+  calibration: "校準",
+};
+const LAYER_LABEL: Record<Layer, string> = { constitution: "憲法", preference: "偏好", experience: "經驗" };
+
+/** 檢索欄位：主張最重，情境與領域次之，內文與證據原話再次之 */
+function memoryFields(m: Memory): Fields {
+  const x = m.meta;
+  return [
+    [x.claim, 3],
+    [[x.scope.domain ?? "", ...x.scope.contexts].join(" "), 2],
+    [`${x.kind} ${KIND_LABEL[x.kind]} ${LAYER_LABEL[x.layer]}`, 1],
+    [m.body, 1],
+    [x.evidence.map((e) => e.quote ?? "").join(" "), 1],
+  ];
 }
 
-function haystack(m: Memory): string {
-  const s = m.meta.scope;
-  return [m.meta.claim, m.meta.kind, s.domain ?? "", ...s.contexts, m.body].join(" ");
-}
-
-function relevance(query: Set<string>, text: string): number {
-  if (query.size === 0) return 0;
-  const t = tokenize(text);
-  let hit = 0;
-  for (const q of query) if (t.has(q)) hit++;
-  return hit / query.size;
+function docFields(d: ConstitutionDoc): Fields {
+  return [
+    [d.title, 3],
+    [d.body, 1],
+  ];
 }
 
 // 給 agent 讀的標籤：以第三人稱指稱使用者，避免 agent 把「你」讀成自己
@@ -76,9 +82,10 @@ async function visibleConstitution(vault: Vault, actor: Actor): Promise<Constitu
   return (await vault.listConstitution()).filter((d) => canSee(actor, d.disclosure));
 }
 
-function rank(items: Memory[], query: Set<string>): Memory[] {
+function rank(items: Memory[], query: string): Memory[] {
+  const scores = score(items, memoryFields, query);
   return items
-    .map((m) => ({ m, r: relevance(query, haystack(m)) }))
+    .map((m, i) => ({ m, r: scores[i]! }))
     .sort(
       (a, b) =>
         LAYER_RANK[a.m.meta.layer] - LAYER_RANK[b.m.meta.layer] ||
@@ -99,7 +106,7 @@ export async function getContext(
   budget = 1500,
 ): Promise<string> {
   const docs = await visibleConstitution(vault, actor);
-  const mems = rank(await visibleMemories(vault, actor), tokenize(task));
+  const mems = rank(await visibleMemories(vault, actor), task);
   const out: string[] = [];
   let used = 0;
   const push = (s: string) => {
@@ -145,21 +152,31 @@ export async function recall(
     if (!m || !canSee(actor, m.meta.disclosure, m.meta.scope.agents)) return `找不到或無權存取：${opts.id}`;
     return renderDetail(m, vault.now());
   }
-  const q = tokenize(opts.query ?? "");
+  const query = opts.query ?? "";
   const limit = opts.limit ?? 8;
-  const docs = (await visibleConstitution(vault, actor))
-    .map((d) => ({ d, r: relevance(q, `${d.title} ${d.body}`) }))
-    .filter((x) => x.r > 0)
+  // 憲法與知識放在同一個語料裡計分，IDF 與門檻才一致
+  const docs = await visibleConstitution(vault, actor);
+  const mems = await visibleMemories(vault, actor);
+  const scores = score<ConstitutionDoc | Memory>(
+    [...docs, ...mems],
+    (x) => ("meta" in x ? memoryFields(x) : docFields(x)),
+    query,
+  );
+  const cutoff = Math.max(0, ...scores) * MIN_RELATIVE_SCORE;
+  const keep = (r: number) => r > 0 && r >= cutoff;
+  const hitDocs = docs
+    .map((d, i) => ({ d, r: scores[i]! }))
+    .filter((x) => keep(x.r))
     .sort((a, b) => b.r - a.r);
-  const mems = (await visibleMemories(vault, actor))
-    .map((m) => ({ m, r: relevance(q, haystack(m)) }))
-    .filter((x) => x.r > 0)
+  const hitMems = mems
+    .map((m, i) => ({ m, r: scores[docs.length + i]! }))
+    .filter((x) => keep(x.r))
     .sort((a, b) => b.r - a.r || b.m.meta.confidence - a.m.meta.confidence)
     .slice(0, limit);
-  if (!docs.length && !mems.length) return `沒有符合「${opts.query ?? ""}」的知識。`;
+  if (!hitDocs.length && !hitMems.length) return `沒有符合「${query}」的知識。`;
   const parts: string[] = [];
-  for (const { d } of docs) parts.push(`## 憲法：${d.title}（${d.file}）\n${d.body}`);
-  for (const { m } of mems) parts.push(renderDetail(m, vault.now()));
+  for (const { d } of hitDocs) parts.push(`## 憲法：${d.title}（${d.file}）\n${d.body}`);
+  for (const { m } of hitMems) parts.push(renderDetail(m, vault.now()));
   return parts.join("\n\n---\n\n");
 }
 
@@ -204,7 +221,7 @@ export async function buildInstructions(vault: Vault, actor: Actor, maxTokens = 
   const docs = await visibleConstitution(vault, cardActor);
   const mems = rank(
     (await visibleMemories(vault, cardActor)).filter((m) => m.meta.layer !== "experience"),
-    new Set(),
+    "",
   );
   const parts = [
     "SubstrateMesh 是使用者本人擁有的長期記憶基質。開始處理與使用者相關的任務前，先呼叫 get_context(task) 取得關於使用者的索引，需要細節再用 recall。",
