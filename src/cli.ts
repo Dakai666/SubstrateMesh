@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { readFile } from "node:fs/promises";
+import { semanticFromEnv } from "./embed.js";
 import { startHttp } from "./http.js";
 import { importQuestionnaire } from "./importer.js";
 import {
@@ -36,6 +37,10 @@ const HELP = `substrate ${VERSION} — 個人上下文基質
   substrate import <回覆檔> --source <AI 名稱>     匯入問卷回覆，轉為記憶 PR
   substrate expire                               封存到期知識
   substrate views                                重建 views/ 主題視圖
+
+語意檢索（選用，本地 embedding；未設定則只用 BM25）：
+  SUBSTRATE_EMBED_URL=http://127.0.0.1:11434 SUBSTRATE_EMBED_MODEL=qwen3-embedding:0.6b
+  可選 SUBSTRATE_EMBED_ALPHA（BM25 權重，預設 0.5）、SUBSTRATE_EMBED_MIN_COSINE（預設 0.4）
 
 共同參數：
   --vault <路徑>    預設為 $SUBSTRATE_VAULT 或 ~/substrate-vault
@@ -104,6 +109,11 @@ async function main() {
     }
     case "serve": {
       const vault = await Vault.open(vaultPath(a));
+      const semantic = semanticFromEnv(process.env);
+      if (semantic) {
+        vault.enableSemantic(semantic.embedder, semantic.options);
+        console.error(`語意檢索：${semantic.embedder.model}（alpha=${semantic.options.alpha}，cosine 下限=${semantic.options.minCosine}）`);
+      }
       if (a.flags.http) {
         const host = str(a.flags.host) ?? "127.0.0.1";
         const port = Number(str(a.flags.port) ?? 7077);

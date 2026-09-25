@@ -2,6 +2,7 @@ import { promises as fs } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { monotonicFactory } from "ulid";
+import { SemanticIndex, type Embedder, type SemanticOptions } from "./embed.js";
 import { commitPaths, git, isRepo } from "./git.js";
 import { joinThread, parseFrontmatter, splitThread, stringifyFrontmatter } from "./markdown.js";
 import {
@@ -45,6 +46,8 @@ export interface RawEvent {
  */
 export class Vault {
   private queue: Promise<unknown> = Promise.resolve();
+  /** 本地 embedding 語意檢索；null 時只用 BM25 */
+  semantic: SemanticIndex | null = null;
 
   constructor(
     readonly root: string,
@@ -84,6 +87,11 @@ export class Vault {
       throw new Error(`不是 vault（缺少 .keeper/）：${root}。請先執行 substrate init。`);
     }
     return new Vault(root);
+  }
+
+  enableSemantic(embedder: Embedder, options?: SemanticOptions): this {
+    this.semantic = new SemanticIndex(path.join(this.root, ".index"), embedder, options);
+    return this;
   }
 
   nowIso(): string {

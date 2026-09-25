@@ -1,5 +1,5 @@
 import type { ConstitutionDoc, Vault } from "./vault.js";
-import { MIN_RELATIVE_SCORE, score, type Fields } from "./search.js";
+import { MIN_RELATIVE_SCORE, fuse, score, type Fields } from "./search.js";
 import { DISCLOSURE_RANK, type Actor, type Layer, type Memory, type MemoryMeta } from "./types.js";
 
 const LAYER_RANK: Record<Layer, number> = { constitution: 0, preference: 1, experience: 2 };
@@ -60,6 +60,44 @@ function docFields(d: ConstitutionDoc): Fields {
   ];
 }
 
+/** 送去 embedding 的文字：與 memoryFields 對齊，但略過內文（範例全文太長、會稀釋語意） */
+function memoryText(m: Memory): string {
+  const x = m.meta;
+  return [x.claim, [x.scope.domain ?? "", ...x.scope.contexts].join(" "), ...x.evidence.map((e) => e.quote ?? "")]
+    .map((s) => s.trim())
+    .filter(Boolean)
+    .join("\n");
+}
+
+function docText(d: ConstitutionDoc): string {
+  return `${d.title}\n${d.body}`.slice(0, 2000);
+}
+
+type Searchable = ConstitutionDoc | Memory;
+const isMemory = (x: Searchable): x is Memory => "meta" in x;
+
+/**
+ * 相關度：BM25，若有本地 embedding 則與語意相似度混合。
+ * 只對傳入（已依權限過濾）的項目計分；向量則對全部 active 條目建立，
+ * 讓快取與呼叫者無關，不會因不同 agent 的可見範圍而反覆重算。
+ */
+async function relevance(vault: Vault, items: Searchable[], query: string): Promise<number[]> {
+  const bm25 = score(items, (x) => (isMemory(x) ? memoryFields(x) : docFields(x)), query);
+  const sem = vault.semantic;
+  if (!sem || !query.trim() || !items.length) return bm25;
+  const now = vault.now();
+  const [allMems, allDocs] = await Promise.all([vault.listMemories(), vault.listConstitution()]);
+  const corpus = [
+    ...allDocs.map(docText),
+    ...allMems.filter((m) => isActive(m.meta, now)).map(memoryText),
+  ];
+  const cos = await sem.similarities(corpus, query);
+  if (!cos) return bm25;
+  const byText = new Map(corpus.map((t, i) => [t, cos[i]!]));
+  const mine = items.map((x) => byText.get(isMemory(x) ? memoryText(x) : docText(x)) ?? 0);
+  return fuse(bm25, mine, sem.options);
+}
+
 // 給 agent 讀的標籤：以第三人稱指稱使用者，避免 agent 把「你」讀成自己
 const VOICE_LABEL = { stated: "使用者親述", observed: "觀察", inferred: "推測" } as const;
 
@@ -82,8 +120,8 @@ async function visibleConstitution(vault: Vault, actor: Actor): Promise<Constitu
   return (await vault.listConstitution()).filter((d) => canSee(actor, d.disclosure));
 }
 
-function rank(items: Memory[], query: string): Memory[] {
-  const scores = score(items, memoryFields, query);
+async function rank(vault: Vault, items: Memory[], query: string): Promise<Memory[]> {
+  const scores = await relevance(vault, items, query);
   return items
     .map((m, i) => ({ m, r: scores[i]! }))
     .sort(
@@ -106,7 +144,7 @@ export async function getContext(
   budget = 1500,
 ): Promise<string> {
   const docs = await visibleConstitution(vault, actor);
-  const mems = rank(await visibleMemories(vault, actor), task);
+  const mems = await rank(vault, await visibleMemories(vault, actor), task);
   const out: string[] = [];
   let used = 0;
   const push = (s: string) => {
@@ -157,11 +195,7 @@ export async function recall(
   // 憲法與知識放在同一個語料裡計分，IDF 與門檻才一致
   const docs = await visibleConstitution(vault, actor);
   const mems = await visibleMemories(vault, actor);
-  const scores = score<ConstitutionDoc | Memory>(
-    [...docs, ...mems],
-    (x) => ("meta" in x ? memoryFields(x) : docFields(x)),
-    query,
-  );
+  const scores = await relevance(vault, [...docs, ...mems], query);
   const cutoff = Math.max(0, ...scores) * MIN_RELATIVE_SCORE;
   const keep = (r: number) => r > 0 && r >= cutoff;
   const hitDocs = docs
@@ -219,7 +253,8 @@ export const SUBMIT_GUIDE = `## 何時提交記憶（propose_memory）
 export async function buildInstructions(vault: Vault, actor: Actor, maxTokens = 900): Promise<string> {
   const cardActor: Actor = { ...actor, clearance: "card" };
   const docs = await visibleConstitution(vault, cardActor);
-  const mems = rank(
+  const mems = await rank(
+    vault,
     (await visibleMemories(vault, cardActor)).filter((m) => m.meta.layer !== "experience"),
     "",
   );

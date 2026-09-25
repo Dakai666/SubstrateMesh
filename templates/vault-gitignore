@@ -1,3 +1,4 @@
 # 遙測與本機索引：可重建，不進版本控制
 .keeper/logs/
 *.sqlite
+.index/

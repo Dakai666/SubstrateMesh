@@ -122,3 +122,26 @@ export function score<T>(items: T[], fieldsOf: (item: T) => Fields, query: strin
 
 /** 低於最高分此比例的結果視為雜訊，不回傳 */
 export const MIN_RELATIVE_SCORE = 0.25;
+
+/**
+ * 混合 BM25 與語意相似度。
+ * - BM25 以最高分正規化到 0–1。
+ * - cosine 低於 minCosine 視為無關（0），其餘在 [minCosine, 最高 cosine] 之間線性映到 0–1，
+ *   貼著下限的弱相似只貢獻一點點，不會單靠語意把雜訊帶進結果。
+ * 沒有語意分數時原樣回傳 BM25，行為與純關鍵字檢索完全一致。
+ */
+export function fuse(
+  bm25: number[],
+  cosines: number[] | null,
+  opts: { alpha: number; minCosine: number },
+): number[] {
+  if (!cosines) return bm25;
+  const maxB = Math.max(0, ...bm25);
+  const maxC = Math.max(opts.minCosine, ...cosines);
+  const span = maxC - opts.minCosine;
+  return bm25.map((b, i) => {
+    const c = cosines[i]!;
+    const sem = c < opts.minCosine ? 0 : span > 0 ? (c - opts.minCosine) / span : 1;
+    return opts.alpha * (maxB > 0 ? b / maxB : 0) + (1 - opts.alpha) * sem;
+  });
+}
