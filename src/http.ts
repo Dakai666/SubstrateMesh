@@ -53,6 +53,21 @@ export function startHttp(vault: Vault, opts: HttpOptions): Promise<Server> {
     try {
       const body = await readJson(req);
       const session = req.headers["x-substrate-session"];
+      // 連線事件：作為「有呼叫 get_context 的連線比例」的分母（D28）；記錄失敗不影響請求
+      const init = (Array.isArray(body) ? body : [body]).find(
+        (m) => (m as { method?: string } | undefined)?.method === "initialize",
+      ) as { params?: { clientInfo?: { name?: string; version?: string } } } | undefined;
+      if (init) {
+        await vault
+          .logAccess({
+            type: "connect",
+            actor: actor.name,
+            session: typeof session === "string" ? session : undefined,
+            client: init.params?.clientInfo?.name,
+            client_version: init.params?.clientInfo?.version,
+          })
+          .catch(() => undefined);
+      }
       const mcp = await buildServer(vault, actor, typeof session === "string" ? session : undefined);
       const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
       res.on("close", () => {
