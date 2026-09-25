@@ -89,6 +89,10 @@ export class Vault {
     return new Vault(root);
   }
 
+  /**
+   * 啟用（或替換）語意索引。替換時，舊索引上仍在進行的查詢會照舊完成並寫回舊的快取物件，
+   * 只是多花一次 embedding 呼叫；新查詢一律走新索引。實務上只在啟動時呼叫一次。
+   */
   enableSemantic(embedder: Embedder, options?: SemanticOptions): this {
     this.semantic = new SemanticIndex(path.join(this.root, ".index"), embedder, options);
     return this;

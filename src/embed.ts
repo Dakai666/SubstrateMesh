@@ -47,8 +47,9 @@ export class HttpEmbedder implements Embedder {
   constructor(opts: HttpEmbedderOptions) {
     this.model = opts.model;
     this.queryPrefix = opts.queryPrefix ?? QUERY_PREFIX.find(([re]) => re.test(opts.model))?.[1] ?? "";
-    this.openai = /\/embeddings\/?$/.test(opts.url);
-    this.endpoint = this.openai ? opts.url : `${opts.url.replace(/\/+$/, "")}/api/embed`;
+    const url = opts.url.trim().replace(/\/+$/, "");
+    this.openai = /\/embeddings$/.test(url);
+    this.endpoint = this.openai ? url : `${url}/api/embed`;
     this.timeoutMs = opts.timeoutMs ?? 10_000;
   }
 
@@ -117,7 +118,7 @@ interface CacheFile {
 
 /** 連不上時暫停嘗試的時間，避免每次查詢都卡在逾時 */
 const RETRY_AFTER_MS = 60_000;
-/** 單次送給 embedding 端點的文件數 */
+/** 單次送給 embedding 端點的文件數；依模型的輸入上限與速度可調 */
 const BATCH = 32;
 
 /**

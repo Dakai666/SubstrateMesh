@@ -124,10 +124,17 @@ export function score<T>(items: T[], fieldsOf: (item: T) => Fields, query: strin
 export const MIN_RELATIVE_SCORE = 0.25;
 
 /**
+ * 語意映射的最小區間：最高 cosine 只比下限高一點點時，不把微小差距放大成 0–1 滿分布
+ * （例如 0.40 與 0.41 不該分別拿到 0 與滿分）。
+ */
+const MIN_COSINE_SPAN = 0.1;
+
+/**
  * 混合 BM25 與語意相似度。
  * - BM25 以最高分正規化到 0–1。
- * - cosine 低於 minCosine 視為無關（0），其餘在 [minCosine, 最高 cosine] 之間線性映到 0–1，
- *   貼著下限的弱相似只貢獻一點點，不會單靠語意把雜訊帶進結果。
+ * - cosine 嚴格低於 minCosine 視為無關（0）；其餘以 (c - minCosine) / 區間 映到 0–1，
+ *   區間取 max(最高 cosine - minCosine, MIN_COSINE_SPAN)。這是相對於本次語料的正規化，
+ *   換模型或語料規模大幅變動時，minCosine 需要重新校準。
  * 沒有語意分數時原樣回傳 BM25，行為與純關鍵字檢索完全一致。
  */
 export function fuse(
@@ -138,10 +145,10 @@ export function fuse(
   if (!cosines) return bm25;
   const maxB = Math.max(0, ...bm25);
   const maxC = Math.max(opts.minCosine, ...cosines);
-  const span = maxC - opts.minCosine;
+  const span = Math.max(maxC - opts.minCosine, MIN_COSINE_SPAN);
   return bm25.map((b, i) => {
     const c = cosines[i]!;
-    const sem = c < opts.minCosine ? 0 : span > 0 ? (c - opts.minCosine) / span : 1;
+    const sem = c < opts.minCosine ? 0 : (c - opts.minCosine) / span;
     return opts.alpha * (maxB > 0 ? b / maxB : 0) + (1 - opts.alpha) * sem;
   });
 }
