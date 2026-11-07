@@ -149,7 +149,7 @@ export async function buildServer(
     {
       title: "提交記憶 PR",
       description:
-        "提交一筆關於使用者的知識提案，由 Keeper 審查後才會生效。時機：使用者糾正你、明確表達偏好／原則／禁區，或你形成了新的觀察。務必附原話，並誠實標示口吻。你的觀點與推論寫在 rationale。",
+        "提交一筆關於使用者的知識提案，由 Keeper 審查後才會生效。只收關於使用者這個人、跨專案成立的知識，不收單一專案的規格與流程。時機：使用者糾正你、明確表達偏好／原則／禁區，或你形成了新的觀察。務必附原話，並誠實標示口吻。你的觀點與推論寫在 rationale。",
       inputSchema: {
         claim: z.string().min(1).describe("一句話的主張，例如「code review 時先給結論再展開」"),
         kind: z.enum(KINDS).describe("preference 偏好／fact 事實／principle 原則／lesson 教訓／example 範例／focus 當前焦點／calibration 默契校準"),

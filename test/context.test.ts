@@ -153,6 +153,17 @@ describe("buildInstructions", () => {
     expect(ins).toContain("名片目前是空的");
   });
 
+  it("連線指示區分使用者風格與單一專案內容", async () => {
+    const v = await tempVault();
+    const ins = await buildInstructions(v, claude);
+    expect(ins).toContain("不要提交只對單一專案成立的規格");
+    expect(ins).toContain("這些寫進該專案文件或 agent 自己的專案記憶");
+    expect(ins).toContain("換一個專案這條還成立嗎？");
+    expect(ins).toContain("成立、而且說的是使用者這個人，才提交");
+    expect(ins).toContain("跨專案的喜好、策略、品味可以收");
+    expect(ins).not.toContain("專案脈絡");
+  });
+
   it("名片後列出未列出的條目數，依呼叫者權限計算", async () => {
     const v = await tempVault();
     await seed(v, { claim: "偏好繁體中文回覆", disclosure: "card" });
